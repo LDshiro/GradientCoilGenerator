@@ -1,19 +1,26 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import numpy as np
 
 from gradientcoil.surfaces.base import SurfaceGrid
 
 
+def _default_quiver_length(centers: np.ndarray) -> float:
+    spans = np.ptp(centers, axis=0)
+    span = float(np.max(spans)) if spans.size else 0.0
+    return max(span * 0.08, 1e-6)
+
+
 def plot_problem_setup_3d(
-    surfaces: list[SurfaceGrid],
+    surfaces: Iterable[SurfaceGrid],
     *,
-    roi_radius: float,
-    roi_points: np.ndarray,
+    roi_points: np.ndarray | None = None,
+    roi_radius: float | None = None,
     show_normals: bool = True,
     normals_stride: int = 4,
     show_boundary: bool = True,
-    show_roi_wireframe: bool = True,
 ):
     """Plot surfaces, normals, boundary hulls, and ROI points in 3D."""
     import matplotlib.pyplot as plt
@@ -31,6 +38,10 @@ def plot_problem_setup_3d(
 
         if show_normals:
             normals = surface.normals_world_uv[surface.interior_mask][::step]
+            if roi_radius is not None and roi_radius > 0:
+                length = float(roi_radius) * 0.15
+            else:
+                length = _default_quiver_length(centers)
             ax.quiver(
                 subs[:, 0],
                 subs[:, 1],
@@ -38,7 +49,7 @@ def plot_problem_setup_3d(
                 normals[:, 0],
                 normals[:, 1],
                 normals[:, 2],
-                length=roi_radius * 0.15,
+                length=length,
                 normalize=True,
                 linewidth=0.5,
                 alpha=0.6,
@@ -73,11 +84,12 @@ def plot_problem_setup_3d(
                         alpha=0.6,
                     )
 
-    if roi_points.size:
+    if roi_points is not None:
         roi_pts = np.asarray(roi_points, dtype=float)
-        ax.scatter(roi_pts[:, 0], roi_pts[:, 1], roi_pts[:, 2], s=8, alpha=0.5)
+        if roi_pts.size:
+            ax.scatter(roi_pts[:, 0], roi_pts[:, 1], roi_pts[:, 2], s=8, alpha=0.5)
 
-    if show_roi_wireframe:
+    if roi_radius is not None and roi_radius > 0:
         u = np.linspace(0.0, 2 * np.pi, 24)
         v = np.linspace(0.0, np.pi, 12)
         x = roi_radius * np.outer(np.cos(u), np.sin(v))

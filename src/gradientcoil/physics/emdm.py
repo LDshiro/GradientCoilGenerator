@@ -40,21 +40,34 @@ def _cache_key(
     return h.hexdigest()
 
 
-def emdm_components(
+def dipole_field_matrices(
     points: np.ndarray,
     centers: np.ndarray,
     normals: np.ndarray,
     areas: np.ndarray,
     *,
-    chunk: int = 4096,
     mu0: float | None = None,
-    mu0_scale: float = 1.0,
+    chunk_dipoles: int = 4096,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compute EMDM field components for dipole surfaces."""
+    """Compute dipole field matrices for EMDM surfaces."""
     if mu0 is None:
-        mu0 = MU0_DEFAULT * float(mu0_scale)
+        mu0_val = MU0_DEFAULT
     else:
-        mu0 = float(mu0)
+        mu0_val = float(mu0)
+
+    points = np.asarray(points, dtype=float)
+    centers = np.asarray(centers, dtype=float)
+    normals = np.asarray(normals, dtype=float)
+    areas = np.asarray(areas, dtype=float)
+
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError("points must have shape (P, 3).")
+    if centers.ndim != 2 or centers.shape[1] != 3:
+        raise ValueError("centers must have shape (M, 3).")
+    if normals.shape != centers.shape:
+        raise ValueError("normals shape must match centers.")
+    if areas.ndim != 1 or areas.shape[0] != centers.shape[0]:
+        raise ValueError("areas must have shape (M,).")
 
     P = points.shape[0]
     M = centers.shape[0]
@@ -62,9 +75,10 @@ def emdm_components(
     Ay = np.zeros((P, M), dtype=float)
     Az = np.zeros((P, M), dtype=float)
 
-    c = mu0 / (4.0 * np.pi)
-    for j0 in range(0, M, chunk):
-        j1 = min(M, j0 + chunk)
+    c = mu0_val / (4.0 * np.pi)
+    step = max(1, int(chunk_dipoles))
+    for j0 in range(0, M, step):
+        j1 = min(M, j0 + step)
         C = centers[j0:j1]
         N = normals[j0:j1]
         A = areas[j0:j1][:, None]
@@ -81,6 +95,31 @@ def emdm_components(
         Az[:, j0:j1] = B[..., 2]
 
     return Ax, Ay, Az
+
+
+def emdm_components(
+    points: np.ndarray,
+    centers: np.ndarray,
+    normals: np.ndarray,
+    areas: np.ndarray,
+    *,
+    chunk: int = 4096,
+    mu0: float | None = None,
+    mu0_scale: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Backward-compatible wrapper for dipole_field_matrices."""
+    if mu0 is None:
+        mu0_val = MU0_DEFAULT * float(mu0_scale)
+    else:
+        mu0_val = float(mu0)
+    return dipole_field_matrices(
+        points,
+        centers,
+        normals,
+        areas,
+        mu0=mu0_val,
+        chunk_dipoles=chunk,
+    )
 
 
 def build_A_xyz(
@@ -154,7 +193,7 @@ def build_A_xyz(
         for w, centers, normals, areas in zip(
             weights_arr, centers_list, normals_list, areas_list, strict=True
         ):
-            Ax, Ay, Az = emdm_components(
+            Ax, Ay, Az = dipole_field_matrices(
                 points,
                 centers,
                 normals,
@@ -178,7 +217,7 @@ def build_A_xyz(
         for w, centers, normals, areas in zip(
             weights_arr, centers_list, normals_list, areas_list, strict=True
         ):
-            Ax, Ay, Az = emdm_components(
+            Ax, Ay, Az = dipole_field_matrices(
                 points,
                 centers,
                 normals,

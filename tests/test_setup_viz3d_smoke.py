@@ -14,8 +14,8 @@ def test_setup_viz3d_smoke() -> None:
 
     fig, ax = plot_problem_setup_3d(
         [surface],
-        roi_radius=0.1,
         roi_points=roi_points,
+        roi_radius=0.1,
         show_normals=False,
         show_boundary=True,
     )

@@ -32,6 +32,11 @@ def test_emdm_build_A_shapes_concat_and_shared(tmp_path) -> None:
     cache_files = list(tmp_path.glob("emdm_*.npz"))
     assert len(cache_files) >= 1
 
+    Ax2, Ay2, Az2 = build_A_xyz(points, [disk, plane, cyl], mode="concat", cache_dir=tmp_path)
+    assert np.allclose(Ax, Ax2)
+    assert np.allclose(Ay, Ay2)
+    assert np.allclose(Az, Az2)
+
     disk2 = build_disk_polar_surface(DiskPolarSurfaceConfig(R_AP=0.2, NR=4, NT=6, z0=0.05))
     Ax_s, Ay_s, Az_s = build_A_xyz(
         points,
