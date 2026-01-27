@@ -9,28 +9,28 @@ from .base import SurfaceGrid
 
 @dataclass
 class PlaneCartSurfaceConfig:
-    """Configuration for a Cartesian plane surface clipped by a circular aperture."""
+    """Configuration for a rectangular Cartesian plane surface (no mask).
+
+    R_AP is retained for backward compatibility and ignored.
+    """
 
     PLANE_HALF: float
     NX: int
     NY: int
-    R_AP: float
+    R_AP: float | None = None
     z0: float = 0.0
 
 
 def build_plane_cart_surface(cfg: PlaneCartSurfaceConfig) -> SurfaceGrid:
-    """Build a SurfaceGrid for a Cartesian plane with circular aperture."""
+    """Build a SurfaceGrid for a rectangular Cartesian plane (no mask)."""
     if cfg.NX < 1 or cfg.NY < 1:
         raise ValueError("NX and NY must be >= 1.")
     if cfg.PLANE_HALF <= 0.0:
         raise ValueError("PLANE_HALF must be positive.")
-    if cfg.R_AP <= 0.0:
-        raise ValueError("R_AP must be positive.")
 
     nx = int(cfg.NX)
     ny = int(cfg.NY)
     plane_half = float(cfg.PLANE_HALF)
-    r_ap = float(cfg.R_AP)
     z0 = float(cfg.z0)
 
     dx = 2.0 * plane_half / nx
@@ -49,19 +49,12 @@ def build_plane_cart_surface(cfg: PlaneCartSurfaceConfig) -> SurfaceGrid:
     scale_u = np.full((ny, nx), dy, dtype=float)
     scale_v = np.full((ny, nx), dx, dtype=float)
 
-    mask_circle = (X_plot**2 + Y_plot**2) <= (r_ap**2)
-
-    inside_up = np.zeros_like(mask_circle, dtype=bool)
-    inside_up[1:, :] = mask_circle[:-1, :]
-    inside_down = np.zeros_like(mask_circle, dtype=bool)
-    inside_down[:-1, :] = mask_circle[1:, :]
-    inside_left = np.zeros_like(mask_circle, dtype=bool)
-    inside_left[:, 1:] = mask_circle[:, :-1]
-    inside_right = np.zeros_like(mask_circle, dtype=bool)
-    inside_right[:, :-1] = mask_circle[:, 1:]
-
-    boundary_mask = mask_circle & ~(inside_up & inside_down & inside_left & inside_right)
-    interior_mask = mask_circle & ~boundary_mask
+    boundary_mask = np.zeros((ny, nx), dtype=bool)
+    boundary_mask[0, :] = True
+    boundary_mask[-1, :] = True
+    boundary_mask[:, 0] = True
+    boundary_mask[:, -1] = True
+    interior_mask = ~boundary_mask
 
     coords_int = np.argwhere(interior_mask)
     idx_map = -np.ones((ny, nx), dtype=int)
@@ -87,12 +80,11 @@ def build_plane_cart_surface(cfg: PlaneCartSurfaceConfig) -> SurfaceGrid:
     surface.PLANE_HALF = plane_half
     surface.NX = nx
     surface.NY = ny
-    surface.R_AP = r_ap
+    surface.R_AP = None if cfg.R_AP is None else float(cfg.R_AP)
     surface.z0 = z0
     surface.dx = dx
     surface.dy = dy
     surface.x_c = x_c
     surface.y_c = y_c
-    surface.mask_circle = mask_circle
 
     return surface
