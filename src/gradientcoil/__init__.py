@@ -11,12 +11,16 @@ from .surfaces import (
     build_disk_polar_surface,
     build_plane_cart_surface,
 )
+from .targets import BzShimTargetSpec, BzTarget, ShimTerm, standard_shim_terms
 
 __all__ = [
+    "BzShimTargetSpec",
+    "BzTarget",
     "CylinderUnwrapSurfaceConfig",
     "DiskPolarSurfaceConfig",
     "MU0_DEFAULT",
     "PlaneCartSurfaceConfig",
+    "ShimTerm",
     "SurfaceGrid",
     "build_cylinder_unwrap_surface",
     "build_disk_polar_surface",
@@ -25,4 +29,5 @@ __all__ = [
     "dipole_field_matrices",
     "emdm_components",
     "plot_problem_setup_3d",
+    "standard_shim_terms",
 ]
