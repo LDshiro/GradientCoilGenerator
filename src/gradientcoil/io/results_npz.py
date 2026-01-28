@@ -22,8 +22,16 @@ def list_npz_runs(runs_dir: Path) -> list[Path]:
     return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
-def load_npz(path: Path) -> np.lib.npyio.NpzFile:
-    return np.load(Path(path), allow_pickle=True)
+def load_npz(path: Path | str | object) -> np.lib.npyio.NpzFile:
+    if hasattr(path, "kind") and hasattr(path, "path"):
+        entry = path
+        if entry.kind == "folder":
+            return np.load(Path(entry.path) / "run.npz", allow_pickle=False)
+        return np.load(Path(entry.path), allow_pickle=True)
+    p = Path(path)
+    if p.is_dir():
+        return np.load(p / "run.npz", allow_pickle=False)
+    return np.load(p, allow_pickle=True)
 
 
 def _add_field(
@@ -50,6 +58,23 @@ def extract_contour_fields(npz: np.lib.npyio.NpzFile) -> list[ContourField]:
 
     _add_field(fields, npz, name="S_grid", x_key="X_plot", y_key="Y_plot", s_key="S_grid")
     _add_field(fields, npz, name="S_polar", x_key="Xp", y_key="Yp", s_key="S_polar")
+
+    sgrid_keys = [key for key in npz.files if key.startswith("S_grid_")]
+    indices = []
+    for key in sgrid_keys:
+        try:
+            indices.append(int(key.split("_")[-1]))
+        except ValueError:
+            continue
+    for idx in sorted(set(indices)):
+        _add_field(
+            fields,
+            npz,
+            name=f"S_grid_{idx}",
+            x_key=f"X_plot_{idx}",
+            y_key=f"Y_plot_{idx}",
+            s_key=f"S_grid_{idx}",
+        )
 
     if "XX" in npz and "YY" in npz:
         if "S_top" in npz:

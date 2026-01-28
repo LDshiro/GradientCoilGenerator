@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import sys
 from pathlib import Path
@@ -30,6 +30,7 @@ def _build_surface(surface_type: str, params: dict) -> object:
             PLANE_HALF=params["PLANE_HALF"],
             NX=params["NX"],
             NY=params["NY"],
+            R_AP=params.get("R_AP"),
             z0=params["z0"],
         )
         return build_plane_cart_surface(cfg)
@@ -80,6 +81,7 @@ def _param_panel(surface_type: str) -> dict:
             "PLANE_HALF": st.number_input("PLANE_HALF", min_value=1e-4, value=0.2, format="%.4f"),
             "NX": int(st.number_input("NX", min_value=2, value=20, step=1)),
             "NY": int(st.number_input("NY", min_value=2, value=16, step=1)),
+            "R_AP": st.number_input("R_AP", min_value=1e-4, value=0.2, format="%.4f"),
             "z0": st.number_input("z0", value=0.0, format="%.4f"),
             "use_two_planes": st.checkbox("use_two_planes", value=False),
             "z_offset": st.number_input("z_offset", value=0.05, format="%.4f"),
@@ -98,8 +100,10 @@ def _param_panel(surface_type: str) -> dict:
 def main() -> None:
     import streamlit as st
 
-    from gradientcoil.io.results_npz import extract_contour_fields, list_npz_runs, load_npz
+    from gradientcoil.app.run_pipeline import run_optimization_pipeline
+    from gradientcoil.io.results_npz import extract_contour_fields
     from gradientcoil.physics.roi_sampling import hammersley_sphere
+    from gradientcoil.runs.listing import list_runs, load_run_config, load_run_npz, load_run_solver
     from gradientcoil.viz.plotly_setup import make_problem_setup_figure_plotly
 
     st.set_page_config(page_title="GradientCoil GUI", layout="wide")
@@ -107,7 +111,8 @@ def main() -> None:
     tab_conditions, tab_results = st.tabs(["条件", "結果"])
 
     with tab_conditions:
-        col_plot, col_params = st.columns([3, 1])
+        run_clicked = False
+        col_plot, col_params = st.columns([4, 1])
         with col_params:
             st.subheader("パラメータ")
             surface_type = st.selectbox(
@@ -121,8 +126,38 @@ def main() -> None:
             roi_radius = st.number_input("ROI radius", min_value=0.0, value=0.1, format="%.4f")
             roi_points_n = int(st.number_input("ROI points", min_value=0, value=64, step=1))
             roi_rotate = st.checkbox("ROI rotate", value=False)
+            sym_axes = st.multiselect(
+                "ROI symmetry axes",
+                options=["x", "y", "z"],
+                default=["x", "y", "z"],
+            )
+            roi_dedup = st.checkbox("ROI dedup", value=False)
+            roi_dedup_eps = st.number_input(
+                "ROI dedup eps", min_value=0.0, value=1e-12, format="%.2e"
+            )
 
-            st.markdown("### 表示")
+            st.markdown("### Target")
+            shim_max_order = int(st.number_input("shim_max_order", min_value=0, value=1, step=1))
+            coeff_text = st.text_input("coeffs (NAME=VALUE, comma separated)", value="Y=0.02")
+            scale_policy = st.selectbox("scale_policy", ["T_per_m", "native"], index=0)
+            L_ref = st.text_input("L_ref", value="auto")
+
+            st.markdown("### Regularizers")
+            use_pitch = st.checkbox("use_pitch", value=False)
+            delta_s = st.number_input("delta_S", min_value=0.0, value=0.0, format="%.4f")
+            pitch_min = st.number_input("pitch_min", min_value=0.0, value=0.0, format="%.4f")
+            use_tv = st.checkbox("use_tv", value=False)
+            lambda_tv = st.number_input("lambda_tv", min_value=0.0, value=0.0, format="%.2e")
+            use_power = st.checkbox("use_power", value=False)
+            lambda_pwr = st.number_input("lambda_pwr", min_value=0.0, value=0.0, format="%.2e")
+            r_sheet = st.number_input("r_sheet", min_value=0.0, value=0.000492, format="%.6f")
+            emdm_mode = st.selectbox("emdm_mode", ["shared", "concat"], index=0)
+
+            st.markdown("### Solver")
+            max_iter = st.number_input("max_iter", min_value=1, value=100, step=1)
+            solver_verbose = st.checkbox("verbose", value=False)
+
+            st.markdown("### 可視化")
             centers_stride = int(st.number_input("centers_stride", min_value=1, value=10))
             normals_stride = int(st.number_input("normals_stride", min_value=1, value=10))
             normal_scale = st.number_input("normal_scale", min_value=0.0, value=0.02, format="%.4f")
@@ -134,19 +169,43 @@ def main() -> None:
                 "roi_radius": roi_radius,
                 "roi_points": roi_points_n,
                 "roi_rotate": roi_rotate,
+                "sym_axes": sym_axes,
+                "roi_dedup": roi_dedup,
+                "roi_dedup_eps": roi_dedup_eps,
+                "shim_max_order": shim_max_order,
+                "coeffs": coeff_text,
+                "scale_policy": scale_policy,
+                "L_ref": L_ref,
+                "use_pitch": use_pitch,
+                "delta_S": delta_s,
+                "pitch_min": pitch_min,
+                "use_tv": use_tv,
+                "lambda_tv": lambda_tv,
+                "use_power": use_power,
+                "lambda_pwr": lambda_pwr,
+                "r_sheet": r_sheet,
+                "emdm_mode": emdm_mode,
+                "max_iter": max_iter,
+                "solver_verbose": solver_verbose,
                 "centers_stride": centers_stride,
                 "normals_stride": normals_stride,
                 "normal_scale": normal_scale,
             }
             st.json(summary)
 
+            st.markdown("### Run Optimization")
+            run_clicked = st.button("Run Optimization")
+
         with col_plot:
-            st.subheader("3D 設定ビュー")
+            st.subheader("3D 可視化")
             try:
                 surfaces = _build_surfaces(surface_type, params)
                 if roi_points_n > 0 and roi_radius > 0:
                     roi_points = hammersley_sphere(
-                        roi_points_n, roi_radius, rotate=roi_rotate, seed=0
+                        roi_points_n,
+                        roi_radius,
+                        rotate=roi_rotate,
+                        seed=0,
                     )
                 else:
                     roi_points = None
@@ -162,24 +221,103 @@ def main() -> None:
                 )
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as exc:
-                st.error(f"表示に失敗しました: {exc}")
+                st.error(f"可視化に失敗しました: {exc}")
+
+        if run_clicked:
+            status_box = st.empty()
+
+            def _progress(stage: str, info: str) -> None:
+                status_box.info(f"{stage}: {info}")
+
+            coeffs: dict[str, float] = {}
+            if coeff_text.strip():
+                for item in coeff_text.split(","):
+                    if not item.strip():
+                        continue
+                    if "=" in item:
+                        name, val = item.split("=", 1)
+                        coeffs[name.strip()] = float(val)
+
+            gap = 2.0 * float(params.get("z_offset", 0.0)) if params.get("use_two_planes") else 0.0
+            J_max = float(delta_s / pitch_min) if (use_pitch and pitch_min > 0.0) else 0.0
+
+            config = {
+                "out_dir": str(ROOT / "runs"),
+                "surface_type": surface_type,
+                "surface_params": params,
+                "use_two_planes": bool(params.get("use_two_planes")),
+                "gap": gap,
+                "flip_second_normals": bool(params.get("flip_second_normals")),
+                "roi": {
+                    "roi_radius": float(roi_radius),
+                    "roi_n": int(roi_points_n),
+                    "roi_rotate": bool(roi_rotate),
+                    "sym_axes": tuple(sym_axes),
+                    "roi_dedup": bool(roi_dedup),
+                    "roi_dedup_eps": float(roi_dedup_eps),
+                },
+                "target": {
+                    "shim_max_order": int(shim_max_order),
+                    "coeffs": coeffs,
+                    "scale_policy": scale_policy,
+                    "L_ref": L_ref,
+                },
+                "spec": {
+                    "use_tv": bool(use_tv),
+                    "lambda_tv": float(lambda_tv),
+                    "use_pitch": bool(use_pitch),
+                    "J_max": float(J_max),
+                    "use_power": bool(use_power),
+                    "lambda_pwr": float(lambda_pwr),
+                    "r_sheet": float(r_sheet),
+                    "emdm_mode": emdm_mode,
+                },
+                "solver": {
+                    "verbose": bool(solver_verbose),
+                    "max_iter": int(max_iter),
+                    "time_limit": None,
+                },
+            }
+            with st.spinner("Running optimization..."):
+                try:
+                    run_dir, summary_out = run_optimization_pipeline(config, progress_cb=_progress)
+                    st.success(f"Saved: {run_dir}")
+                    st.session_state["selected_run_label"] = Path(run_dir).name
+                    st.json(summary_out)
+                except Exception as exc:
+                    st.error(f"Optimization failed: {exc}")
 
     with tab_results:
         runs_dir = ROOT / "runs"
         runs_dir.mkdir(exist_ok=True)
-        npz_paths = list_npz_runs(runs_dir)
-        if not npz_paths:
-            st.info("runs/ に npz がありません。")
+        entries = list_runs(runs_dir)
+        if not entries:
+            st.info("runs/ に結果がありません。")
             return
 
-        labels = [p.name for p in npz_paths]
-        selected = st.selectbox("NPZを選択", labels)
-        path = npz_paths[labels.index(selected)]
-        with load_npz(path) as npz:
+        labels = [entry.label for entry in entries]
+        selected_label = st.session_state.get("selected_run_label")
+        default_index = labels.index(selected_label) if selected_label in labels else 0
+
+        selected = st.selectbox("Run", labels, index=default_index)
+        entry = entries[labels.index(selected)]
+
+        config = load_run_config(entry)
+        solver = load_run_solver(entry)
+
+        with load_run_npz(entry) as npz:
             fields = extract_contour_fields(npz)
 
+        st.caption(f"path: {entry.path}")
+        if config:
+            with st.expander("config.json", expanded=False):
+                st.json(config)
+        if solver:
+            with st.expander("solver.json", expanded=False):
+                st.json(solver)
+
         if not fields:
-            st.warning("表示できる等高線データが見つかりません。")
+            st.warning("可視化できるデータが見つかりません。")
             return
 
         import matplotlib.pyplot as plt
@@ -187,6 +325,7 @@ def main() -> None:
         for field in fields:
             fig, ax = plt.subplots(figsize=(5, 4))
             cs = ax.contourf(field.X, field.Y, field.S, levels=30)
+            ax.contour(field.X, field.Y, field.S, levels=30, colors="k", linewidths=0.6)
             fig.colorbar(cs, ax=ax)
             ax.set_title(field.name)
             ax.set_aspect("equal", adjustable="box")
