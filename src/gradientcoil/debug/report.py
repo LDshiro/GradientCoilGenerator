@@ -36,16 +36,36 @@ def summarize_surfaces(surfaces: list[SurfaceGrid]) -> list[dict]:
     return summaries
 
 
-def summarize_roi(points: Array) -> dict:
+def summarize_roi(
+    points: Array,
+    *,
+    points_raw: Array | None = None,
+    weights: Array | None = None,
+    dedup_enabled: bool = False,
+    dedup_eps: float = 0.0,
+) -> dict:
     if points.size == 0:
         return {"count": 0}
     r = np.linalg.norm(points, axis=1)
-    return {
-        "count": int(points.shape[0]),
+    count_used = int(points.shape[0])
+    count_raw = int(points_raw.shape[0]) if points_raw is not None else count_used
+    weights_sum = float(np.sum(weights)) if weights is not None else float(count_used)
+    summary = {
+        "count": count_used,
+        "count_raw": count_raw,
+        "roi_count_raw": count_raw,
+        "roi_count_used": count_used,
+        "roi_unique_count": count_used,
+        "roi_weights_sum": weights_sum,
+        "roi_dedup_enabled": bool(dedup_enabled),
+        "roi_dedup_eps": float(dedup_eps),
         "radius_min": float(np.min(r)),
         "radius_max": float(np.max(r)),
         "radius_mean": float(np.mean(r)),
     }
+    if count_raw > 0:
+        summary["dup_ratio"] = 1.0 - (float(count_used) / float(count_raw))
+    return summary
 
 
 def summarize_target(
@@ -114,6 +134,13 @@ def write_summary_md(path: Path, summary: dict) -> None:
     lines.append("## ROI")
     roi = summary.get("roi", {})
     lines.append(f"- count: {roi.get('count', 0)}")
+    lines.append(f"- roi_count_raw: {roi.get('roi_count_raw')}")
+    lines.append(f"- roi_count_used: {roi.get('roi_count_used')}")
+    lines.append(f"- roi_weights_sum: {roi.get('roi_weights_sum')}")
+    lines.append(f"- roi_dedup_enabled: {roi.get('roi_dedup_enabled')}")
+    lines.append(f"- roi_dedup_eps: {roi.get('roi_dedup_eps')}")
+    if "dup_ratio" in roi:
+        lines.append(f"- dup_ratio: {roi.get('dup_ratio'):.3f}")
     lines.append("")
     lines.append("## Target")
     tgt = summary.get("target", {})
@@ -127,10 +154,13 @@ def write_summary_md(path: Path, summary: dict) -> None:
 
 
 def plot_surface_masks(surfaces: list[SurfaceGrid], out_path: Path) -> None:
-    import matplotlib
-    import matplotlib.pyplot as plt
+    import sys
 
-    matplotlib.use("Agg")
+    import matplotlib
+
+    if "matplotlib.pyplot" not in sys.modules:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
 
     n = len(surfaces)
     fig, axes = plt.subplots(1, n, figsize=(5 * n, 4), squeeze=False)
@@ -154,10 +184,13 @@ def plot_target_slices(
     Bz_x: Array,
     out_path: Path,
 ) -> None:
-    import matplotlib
-    import matplotlib.pyplot as plt
+    import sys
 
-    matplotlib.use("Agg")
+    import matplotlib
+
+    if "matplotlib.pyplot" not in sys.modules:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(1, 2, figsize=(10, 4))
     ax[0].plot(y_line, Bz_y, label="y-line")
@@ -178,10 +211,13 @@ def plot_target_slices(
 
 
 def plot_emdm_sanity(y_line: Array, Bz_dummy_y: Array, out_path: Path) -> None:
-    import matplotlib
-    import matplotlib.pyplot as plt
+    import sys
 
-    matplotlib.use("Agg")
+    import matplotlib
+
+    if "matplotlib.pyplot" not in sys.modules:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(5, 4))
     ax.plot(y_line, Bz_dummy_y)

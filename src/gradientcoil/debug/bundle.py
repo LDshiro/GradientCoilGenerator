@@ -20,7 +20,11 @@ from gradientcoil.debug.report import (
     write_summary_md,
 )
 from gradientcoil.physics.emdm import build_A_xyz
-from gradientcoil.physics.roi_sampling import hammersley_sphere, symmetrize_points
+from gradientcoil.physics.roi_sampling import (
+    dedup_points_with_weights,
+    hammersley_sphere,
+    symmetrize_points,
+)
 from gradientcoil.surfaces.cylinder_unwrap import (
     CylinderUnwrapSurfaceConfig,
     build_cylinder_unwrap_surface,
@@ -28,7 +32,6 @@ from gradientcoil.surfaces.cylinder_unwrap import (
 from gradientcoil.surfaces.disk_polar import DiskPolarSurfaceConfig, build_disk_polar_surface
 from gradientcoil.surfaces.plane_cart import PlaneCartSurfaceConfig, build_plane_cart_surface
 from gradientcoil.targets.bz_shim import BzShimTargetSpec, standard_shim_terms
-from gradientcoil.viz.plotly_setup import make_problem_setup_figure_plotly
 
 
 @dataclass
@@ -52,6 +55,8 @@ class DebugBundleConfig:
     roi_radius: float = 0.1
     roi_n: int = 64
     sym_axes: tuple[str, ...] = ("x", "y", "z")
+    roi_dedup: bool = False
+    roi_dedup_eps: float = 1e-12
     shim_max_order: int = 2
     coeffs: dict[str, float] = field(default_factory=dict)
     scale_policy: str = "T_per_m"
@@ -174,8 +179,20 @@ def generate_debug_bundle(cfg: DebugBundleConfig) -> Path:
     np.savez(out_dir / "surface.npz", **surface_data)
 
     roi_points = hammersley_sphere(cfg.roi_n, cfg.roi_radius, rotate=False)
-    roi_points = symmetrize_points(roi_points, axes=cfg.sym_axes)
-    np.savez(out_dir / "roi.npz", points=roi_points)
+    roi_points_raw = symmetrize_points(roi_points, axes=cfg.sym_axes)
+    if cfg.roi_dedup:
+        roi_points, roi_weights = dedup_points_with_weights(roi_points_raw, cfg.roi_dedup_eps)
+    else:
+        roi_points = roi_points_raw
+        roi_weights = np.ones((roi_points.shape[0],), dtype=float)
+    np.savez(
+        out_dir / "roi.npz",
+        points_raw=roi_points_raw,
+        points=roi_points,
+        weights=roi_weights,
+        dedup_enabled=cfg.roi_dedup,
+        dedup_eps=float(cfg.roi_dedup_eps),
+    )
 
     L_ref = cfg.roi_radius if cfg.L_ref == "auto" else float(cfg.L_ref)
     terms_map = standard_shim_terms(max_order=cfg.shim_max_order)
@@ -195,13 +212,23 @@ def generate_debug_bundle(cfg: DebugBundleConfig) -> Path:
     Bz_y = target_spec.evaluate(y_points)
     Bz_x = target_spec.evaluate(x_points)
 
+    import json
+
+    coeffs_json = json.dumps(cfg.coeffs, ensure_ascii=False)
+    coeff_names = np.asarray(list(cfg.coeffs.keys()), dtype="<U32")
+    coeff_values = np.asarray(list(cfg.coeffs.values()), dtype=float)
+    coeffs_json_arr = np.asarray(coeffs_json, dtype=f"<U{len(coeffs_json) + 1}")
+
     np.savez(
         out_dir / "target.npz",
-        coeffs=cfg.coeffs,
+        coeffs_json=coeffs_json_arr,
+        coeff_names=coeff_names,
+        coeff_values=coeff_values,
         L_ref=float(L_ref),
         scale_policy=cfg.scale_policy,
         Bz_target=Bz_target,
         roi_points=roi_points,
+        roi_weights=roi_weights,
         y_line=y_line,
         Bz_y=Bz_y,
         x_line=x_line,
@@ -237,14 +264,28 @@ def generate_debug_bundle(cfg: DebugBundleConfig) -> Path:
             save_kwargs.update({"Ax": Ax, "Ay": Ay})
         np.savez(out_dir / "A_emdm.npz", **save_kwargs)
 
-    fig = make_problem_setup_figure_plotly(
-        surfaces,
-        roi_points,
-        cfg.roi_radius,
-        show_boundary=True,
-        show_normals=True,
-    )
-    fig.write_html(out_dir / "setup_3d.html")
+    try:
+        from gradientcoil.viz.plotly_setup import make_problem_setup_figure_plotly
+
+        fig = make_problem_setup_figure_plotly(
+            surfaces,
+            roi_points,
+            cfg.roi_radius,
+            show_boundary=True,
+            show_normals=True,
+        )
+        fig.write_html(out_dir / "setup_3d.html")
+    except ModuleNotFoundError:
+        from gradientcoil.post.setup_viz3d import plot_problem_setup_3d
+
+        fig, _ = plot_problem_setup_3d(
+            surfaces,
+            roi_radius=cfg.roi_radius,
+            roi_points=roi_points,
+            show_boundary=True,
+            show_normals=True,
+        )
+        fig.savefig(out_dir / "setup_3d.png")
 
     plot_surface_masks(surfaces, out_dir / "surface_2d.png")
     plot_target_slices(y_line, Bz_y, x_line, Bz_x, out_dir / "target_bz_slices.png")
@@ -253,7 +294,13 @@ def generate_debug_bundle(cfg: DebugBundleConfig) -> Path:
 
     summary = {
         "surface": summarize_surfaces(surfaces),
-        "roi": summarize_roi(roi_points),
+        "roi": summarize_roi(
+            roi_points,
+            points_raw=roi_points_raw,
+            weights=roi_weights,
+            dedup_enabled=cfg.roi_dedup,
+            dedup_eps=float(cfg.roi_dedup_eps),
+        ),
         "target": summarize_target(
             cfg.coeffs, float(L_ref), cfg.scale_policy, Bz_target, y_line, Bz_y, x_line, Bz_x
         ),
@@ -302,6 +349,8 @@ def parse_args(argv: list[str] | None = None) -> DebugBundleConfig:
     parser.add_argument("--roi-radius", type=float, default=0.1)
     parser.add_argument("--roi-n", type=int, default=64)
     parser.add_argument("--sym-axes", default="x,y,z")
+    parser.add_argument("--roi-dedup", action="store_true")
+    parser.add_argument("--roi-dedup-eps", type=float, default=1e-12)
 
     parser.add_argument("--shim-max-order", type=int, default=2)
     parser.add_argument("--coeff", action="append", default=[])
@@ -338,6 +387,8 @@ def parse_args(argv: list[str] | None = None) -> DebugBundleConfig:
         roi_radius=args.roi_radius,
         roi_n=args.roi_n,
         sym_axes=sym_axes or ("x", "y", "z"),
+        roi_dedup=args.roi_dedup,
+        roi_dedup_eps=args.roi_dedup_eps,
         shim_max_order=args.shim_max_order,
         coeffs=coeffs,
         scale_policy=args.scale_policy,

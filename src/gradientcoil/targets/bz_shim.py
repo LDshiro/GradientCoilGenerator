@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -250,3 +251,25 @@ class BzShimTargetSpec(BzTarget):
             origin=np.asarray(data.get("origin", [0.0, 0.0, 0.0]), dtype=float),
             convention=str(data.get("convention", "harmonic_cartesian_v1")),
         )
+
+
+def coeffs_from_npz(npz: dict) -> dict[str, float]:
+    """Recover coeffs from a target.npz-like dict."""
+    if "coeffs_json" in npz:
+        try:
+            raw = npz["coeffs_json"]
+            if isinstance(raw, np.ndarray):
+                raw = raw.item() if raw.shape == () else raw[0]
+            return dict(json.loads(str(raw)))
+        except Exception:
+            pass
+    if "coeff_names" in npz and "coeff_values" in npz:
+        names = [str(x) for x in npz["coeff_names"]]
+        values = np.asarray(npz["coeff_values"], dtype=float)
+        return dict(zip(names, values, strict=False))
+    if "coeffs" in npz:
+        try:
+            return dict(npz["coeffs"].item())
+        except Exception:
+            return {}
+    return {}

@@ -78,3 +78,31 @@ def symmetrize_points(points: np.ndarray, axes: Iterable[str] = ("x", "y", "z"))
     flips_unique = np.unique(np.array(flips, dtype=float), axis=0)
     out = np.vstack([P * f for f in flips_unique])
     return out
+
+
+def dedup_points_with_weights(
+    points: np.ndarray, eps: float = 0.0
+) -> tuple[np.ndarray, np.ndarray]:
+    """Deduplicate points within eps tolerance and return weights."""
+    P = np.asarray(points, dtype=float)
+    if P.ndim != 2 or P.shape[1] != 3:
+        raise ValueError("points must have shape (N, 3).")
+    if P.size == 0:
+        return P.reshape(0, 3), np.zeros((0,), dtype=float)
+    if eps < 0.0:
+        raise ValueError("eps must be non-negative.")
+
+    if eps == 0.0:
+        uniq, idx, counts = np.unique(P, axis=0, return_index=True, return_counts=True)
+        order = np.argsort(idx)
+        return uniq[order], counts[order].astype(float)
+
+    q = np.round(P / eps).astype(np.int64)
+    q = np.ascontiguousarray(q)
+    key_dtype = np.dtype([("x", np.int64), ("y", np.int64), ("z", np.int64)])
+    keys = q.view(key_dtype).reshape(-1)
+    _, idx, counts = np.unique(keys, return_index=True, return_counts=True)
+    order = np.argsort(idx)
+    uniq = P[idx[order]]
+    weights = counts[order].astype(float)
+    return uniq, weights
