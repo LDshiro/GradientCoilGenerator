@@ -72,19 +72,21 @@ def _param_panel(surface_type: str) -> dict:
             "NR": int(st.number_input("NR", min_value=2, value=8, step=1)),
             "NT": int(st.number_input("NT", min_value=3, value=16, step=1)),
             "z0": st.number_input("z0", value=0.0, format="%.4f"),
-            "use_two_planes": st.checkbox("use_two_planes", value=False),
-            "z_offset": st.number_input("z_offset", value=0.05, format="%.4f"),
+            "use_two_planes": st.checkbox("use_two_planes", value=True),
+            "z_offset": st.number_input("z_offset", value=0.1500, format="%.4f"),
             "flip_second_normals": st.checkbox("flip_second_normals", value=False),
         }
     if surface_type == "plane_cart":
         return {
-            "PLANE_HALF": st.number_input("PLANE_HALF", min_value=1e-4, value=0.2, format="%.4f"),
+            "PLANE_HALF": st.number_input(
+                "PLANE_HALF", min_value=1e-4, value=0.3000, format="%.4f"
+            ),
             "NX": int(st.number_input("NX", min_value=2, value=20, step=1)),
-            "NY": int(st.number_input("NY", min_value=2, value=16, step=1)),
-            "R_AP": st.number_input("R_AP", min_value=1e-4, value=0.2, format="%.4f"),
+            "NY": int(st.number_input("NY", min_value=2, value=20, step=1)),
+            "R_AP": st.number_input("R_AP", min_value=1e-4, value=0.1, format="%.4f"),
             "z0": st.number_input("z0", value=0.0, format="%.4f"),
-            "use_two_planes": st.checkbox("use_two_planes", value=False),
-            "z_offset": st.number_input("z_offset", value=0.05, format="%.4f"),
+            "use_two_planes": st.checkbox("use_two_planes", value=True),
+            "z_offset": st.number_input("z_offset", value=0.1500, format="%.4f"),
             "flip_second_normals": st.checkbox("flip_second_normals", value=False),
         }
     return {
@@ -112,19 +114,19 @@ def main() -> None:
 
     with tab_conditions:
         run_clicked = False
-        col_plot, col_params = st.columns([4, 1])
+        col_plot, col_params = st.columns([5, 1])
         with col_params:
             st.subheader("パラメータ")
             surface_type = st.selectbox(
                 "surface",
                 ["disk_polar", "plane_cart", "cylinder_unwrap"],
-                index=0,
+                index=1,
             )
             params = _param_panel(surface_type)
 
             st.markdown("### ROI")
             roi_radius = st.number_input("ROI radius", min_value=0.0, value=0.1, format="%.4f")
-            roi_points_n = int(st.number_input("ROI points", min_value=0, value=64, step=1))
+            roi_points_n = int(st.number_input("ROI points", min_value=0, value=128, step=1))
             roi_rotate = st.checkbox("ROI rotate", value=False)
             sym_axes = st.multiselect(
                 "ROI symmetry axes",
@@ -155,11 +157,9 @@ def main() -> None:
 
             st.markdown("### Solver")
             max_iter = st.number_input("max_iter", min_value=1, value=100, step=1)
-            solver_verbose = st.checkbox("verbose", value=False)
+            solver_verbose = st.checkbox("verbose", value=True)
 
             st.markdown("### 可視化")
-            centers_stride = int(st.number_input("centers_stride", min_value=1, value=10))
-            normals_stride = int(st.number_input("normals_stride", min_value=1, value=10))
             normal_scale = st.number_input("normal_scale", min_value=0.0, value=0.02, format="%.4f")
 
             st.markdown("### まとめ")
@@ -187,8 +187,6 @@ def main() -> None:
                 "emdm_mode": emdm_mode,
                 "max_iter": max_iter,
                 "solver_verbose": solver_verbose,
-                "centers_stride": centers_stride,
-                "normals_stride": normals_stride,
                 "normal_scale": normal_scale,
             }
             st.json(summary)
@@ -215,10 +213,11 @@ def main() -> None:
                     roi_radius if roi_radius > 0 else None,
                     show_boundary=True,
                     show_normals=True,
-                    normals_stride=normals_stride,
-                    centers_stride=centers_stride,
+                    normals_stride=1,
+                    centers_stride=1,
                     normal_scale=normal_scale,
                 )
+                fig.update_layout(height=700)
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as exc:
                 st.error(f"可視化に失敗しました: {exc}")
