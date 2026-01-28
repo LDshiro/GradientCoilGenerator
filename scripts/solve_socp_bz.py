@@ -10,6 +10,8 @@ from gradientcoil.optimize.socp_bz import SocpBzSpec, solve_socp_bz
 from gradientcoil.physics.roi_sampling import (
     dedup_points_with_weights,
     hammersley_sphere,
+    sample_sphere_fibonacci,
+    sample_sphere_sym_hammersley,
     symmetrize_points,
 )
 from gradientcoil.surfaces.cylinder_unwrap import (
@@ -127,6 +129,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--roi-radius", type=float, default=0.1)
     parser.add_argument("--roi-n", type=int, default=64)
     parser.add_argument("--sym-axes", default="x,y,z")
+    parser.add_argument(
+        "--roi-sampler",
+        choices=["hammersley", "fibonacci", "sym_hammersley"],
+        default="hammersley",
+    )
     parser.add_argument("--roi-dedup", action="store_true")
     parser.add_argument("--roi-dedup-eps", type=float, default=1e-12)
 
@@ -164,10 +171,14 @@ def main(argv: list[str] | None = None) -> int:
 
     surfaces = _build_surfaces(args)
 
-    roi_points = hammersley_sphere(args.roi_n, args.roi_radius, rotate=False)
-    roi_points_raw = symmetrize_points(
-        roi_points, axes=tuple(a.strip() for a in args.sym_axes.split(","))
-    )
+    sym_axes = tuple(a.strip() for a in args.sym_axes.split(",") if a.strip())
+    if args.roi_sampler == "fibonacci":
+        roi_points = sample_sphere_fibonacci(args.roi_n, args.roi_radius, rotate=False)
+    elif args.roi_sampler == "sym_hammersley":
+        roi_points = sample_sphere_sym_hammersley(args.roi_n, args.roi_radius, sym_axes=sym_axes)
+    else:
+        roi_points = hammersley_sphere(args.roi_n, args.roi_radius, rotate=False)
+    roi_points_raw = symmetrize_points(roi_points, axes=sym_axes)
     if args.roi_dedup:
         roi_points, roi_weights = dedup_points_with_weights(roi_points_raw, args.roi_dedup_eps)
     else:
@@ -236,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
         "gap": float(args.gap),
         "roi_n": int(args.roi_n),
         "roi_radius": float(args.roi_radius),
+        "roi_sampler": args.roi_sampler,
         "roi_dedup": bool(args.roi_dedup),
         "roi_dedup_eps": float(args.roi_dedup_eps),
         "coeffs": coeffs,

@@ -19,6 +19,41 @@ def _vdc_base2(n: int) -> np.ndarray:
     return out
 
 
+def _vdc_base(n: int, base: int) -> np.ndarray:
+    if base < 2:
+        raise ValueError("base must be >= 2.")
+    out = np.empty(n, dtype=float)
+    for k in range(n):
+        x = 0.0
+        denom = 1.0
+        m = k
+        while m:
+            denom *= base
+            x += (m % base) / denom
+            m //= base
+        out[k] = x
+    return out
+
+
+def _apply_random_rotation(pts: np.ndarray, *, seed: int | None = None) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    u1, u2, u3 = rng.random(3)
+    q1 = np.sqrt(1 - u1) * np.sin(2 * np.pi * u2)
+    q2 = np.sqrt(1 - u1) * np.cos(2 * np.pi * u2)
+    q3 = np.sqrt(u1) * np.sin(2 * np.pi * u3)
+    q4 = np.sqrt(u1) * np.cos(2 * np.pi * u3)
+    xq, yq, zq, wq = q1, q2, q3, q4
+    R = np.array(
+        [
+            [1 - 2 * (yq * yq + zq * zq), 2 * (xq * yq - zq * wq), 2 * (xq * zq + yq * wq)],
+            [2 * (xq * yq + zq * wq), 1 - 2 * (xq * xq + zq * zq), 2 * (yq * zq - xq * wq)],
+            [2 * (xq * zq - yq * wq), 2 * (yq * zq + xq * wq), 1 - 2 * (xq * xq + yq * yq)],
+        ],
+        dtype=float,
+    )
+    return pts @ R.T
+
+
 def hammersley_sphere(
     n: int, radius: float, *, rotate: bool = False, seed: int | None = None
 ) -> np.ndarray:
@@ -37,23 +72,68 @@ def hammersley_sphere(
     pts = np.column_stack([x, y, z])
 
     if rotate:
-        rng = np.random.default_rng(seed)
-        u1, u2, u3 = rng.random(3)
-        q1 = np.sqrt(1 - u1) * np.sin(2 * np.pi * u2)
-        q2 = np.sqrt(1 - u1) * np.cos(2 * np.pi * u2)
-        q3 = np.sqrt(u1) * np.sin(2 * np.pi * u3)
-        q4 = np.sqrt(u1) * np.cos(2 * np.pi * u3)
-        xq, yq, zq, wq = q1, q2, q3, q4
-        R = np.array(
-            [
-                [1 - 2 * (yq * yq + zq * zq), 2 * (xq * yq - zq * wq), 2 * (xq * zq + yq * wq)],
-                [2 * (xq * yq + zq * wq), 1 - 2 * (xq * xq + zq * zq), 2 * (yq * zq - xq * wq)],
-                [2 * (xq * zq - yq * wq), 2 * (yq * zq + xq * wq), 1 - 2 * (xq * xq + yq * yq)],
-            ],
-            dtype=float,
-        )
-        pts = pts @ R.T
+        pts = _apply_random_rotation(pts, seed=seed)
 
+    return radius * pts
+
+
+def sample_sphere_fibonacci(
+    n: int, radius: float, *, rotate: bool = False, seed: int | None = None
+) -> np.ndarray:
+    """Generate Fibonacci points on a sphere."""
+    N = int(n)
+    if N <= 0:
+        return np.zeros((0, 3), dtype=float)
+
+    k = np.arange(N, dtype=float)
+    z = 1.0 - 2.0 * (k + 0.5) / N
+    r = np.sqrt(np.maximum(0.0, 1.0 - z * z))
+    golden_angle = np.pi * (3.0 - np.sqrt(5.0))
+    th = k * golden_angle
+    x = r * np.cos(th)
+    y = r * np.sin(th)
+    pts = np.column_stack([x, y, z])
+
+    if rotate:
+        pts = _apply_random_rotation(pts, seed=seed)
+
+    return radius * pts
+
+
+def sample_sphere_sym_hammersley(
+    n: int,
+    radius: float,
+    *,
+    sym_axes: Iterable[str] = ("x", "y", "z"),
+    base: int = 2,
+) -> np.ndarray:
+    """Generate Hammersley points on a sphere in a symmetry-aware fundamental domain."""
+    N = int(n)
+    if N <= 0:
+        return np.zeros((0, 3), dtype=float)
+
+    axes_set = set(sym_axes)
+    if "x" in axes_set and "y" in axes_set:
+        phi_min, phi_max = 0.0, 0.5 * np.pi
+    elif "x" in axes_set:
+        phi_min, phi_max = -0.5 * np.pi, 0.5 * np.pi
+    elif "y" in axes_set:
+        phi_min, phi_max = 0.0, np.pi
+    else:
+        phi_min, phi_max = 0.0, 2.0 * np.pi
+
+    z_min, z_max = (0.0, 1.0) if "z" in axes_set else (-1.0, 1.0)
+
+    u = (np.arange(N, dtype=float) + 0.5) / N
+    z = z_min + (z_max - z_min) * u
+    vdc = _vdc_base(N, base)
+    v = (vdc + 0.5 / N) % 1.0
+    phi = phi_min + (phi_max - phi_min) * v
+
+    r = np.sqrt(np.maximum(0.0, 1.0 - z * z))
+    x = r * np.cos(phi)
+    y = r * np.sin(phi)
+    pts = np.column_stack([x, y, z])
     return radius * pts
 
 

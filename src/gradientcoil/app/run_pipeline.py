@@ -10,6 +10,8 @@ from gradientcoil.optimize.socp_bz import SocpBzSpec, solve_socp_bz
 from gradientcoil.physics.roi_sampling import (
     dedup_points_with_weights,
     hammersley_sphere,
+    sample_sphere_fibonacci,
+    sample_sphere_sym_hammersley,
     symmetrize_points,
 )
 from gradientcoil.runs.run_bundle import create_run_dir, save_run_bundle
@@ -120,12 +122,27 @@ def run_optimization_pipeline(
     surfaces = _build_surfaces(config)
 
     roi_cfg = config["roi"]
-    roi_points = hammersley_sphere(
-        roi_cfg["roi_n"],
-        roi_cfg["roi_radius"],
-        rotate=bool(roi_cfg.get("roi_rotate", False)),
-        seed=0,
-    )
+    roi_sampler = roi_cfg.get("sampler", "hammersley")
+    if roi_sampler == "fibonacci":
+        roi_points = sample_sphere_fibonacci(
+            roi_cfg["roi_n"],
+            roi_cfg["roi_radius"],
+            rotate=bool(roi_cfg.get("roi_rotate", False)),
+            seed=0,
+        )
+    elif roi_sampler == "sym_hammersley":
+        roi_points = sample_sphere_sym_hammersley(
+            roi_cfg["roi_n"],
+            roi_cfg["roi_radius"],
+            sym_axes=tuple(roi_cfg["sym_axes"]),
+        )
+    else:
+        roi_points = hammersley_sphere(
+            roi_cfg["roi_n"],
+            roi_cfg["roi_radius"],
+            rotate=bool(roi_cfg.get("roi_rotate", False)),
+            seed=0,
+        )
     roi_points_raw = symmetrize_points(roi_points, axes=tuple(roi_cfg["sym_axes"]))
     if roi_cfg["roi_dedup"]:
         roi_points, roi_weights = dedup_points_with_weights(

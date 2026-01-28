@@ -103,12 +103,18 @@ def main() -> None:
     import streamlit as st
 
     from gradientcoil.app.run_pipeline import run_optimization_pipeline
-    from gradientcoil.io.results_npz import extract_contour_fields
-    from gradientcoil.physics.roi_sampling import hammersley_sphere
+    from gradientcoil.io.results_npz import ContourField, extract_contour_fields
+    from gradientcoil.physics.roi_sampling import (
+        hammersley_sphere,
+        sample_sphere_fibonacci,
+        sample_sphere_sym_hammersley,
+    )
     from gradientcoil.runs.listing import list_runs, load_run_config, load_run_npz, load_run_solver
+    from gradientcoil.viz.mesh import periodic_theta_extend
     from gradientcoil.viz.plotly_setup import make_problem_setup_figure_plotly
 
     st.set_page_config(page_title="GradientCoil GUI", layout="wide")
+    st.markdown("# Gradient Coil Designer")
 
     tab_conditions, tab_results = st.tabs(["条件", "結果"])
 
@@ -132,6 +138,16 @@ def main() -> None:
                 "ROI symmetry axes",
                 options=["x", "y", "z"],
                 default=["x", "y", "z"],
+            )
+            roi_sampler = st.selectbox(
+                "ROI sampler",
+                options=["hammersley", "fibonacci", "sym_hammersley"],
+                index=0,
+                format_func={
+                    "hammersley": "Hammersley (quasi-uniform)",
+                    "fibonacci": "Fibonacci (quasi-uniform)",
+                    "sym_hammersley": "Symmetric Hammersley (axis-symmetric)",
+                }.get,
             )
             roi_dedup = st.checkbox("ROI dedup", value=False)
             roi_dedup_eps = st.number_input(
@@ -176,6 +192,7 @@ def main() -> None:
                 "roi_points": roi_points_n,
                 "roi_rotate": roi_rotate,
                 "sym_axes": sym_axes,
+                "roi_sampler": roi_sampler,
                 "roi_dedup": roi_dedup,
                 "roi_dedup_eps": roi_dedup_eps,
                 "shim_max_order": shim_max_order,
@@ -206,12 +223,24 @@ def main() -> None:
             try:
                 surfaces = _build_surfaces(surface_type, params)
                 if roi_points_n > 0 and roi_radius > 0:
-                    roi_points = hammersley_sphere(
-                        roi_points_n,
-                        roi_radius,
-                        rotate=roi_rotate,
-                        seed=0,
-                    )
+                    if roi_sampler == "fibonacci":
+                        roi_points = sample_sphere_fibonacci(
+                            roi_points_n,
+                            roi_radius,
+                            rotate=roi_rotate,
+                            seed=0,
+                        )
+                    elif roi_sampler == "sym_hammersley":
+                        roi_points = sample_sphere_sym_hammersley(
+                            roi_points_n, roi_radius, sym_axes=tuple(sym_axes)
+                        )
+                    else:
+                        roi_points = hammersley_sphere(
+                            roi_points_n,
+                            roi_radius,
+                            rotate=roi_rotate,
+                            seed=0,
+                        )
                 else:
                     roi_points = None
                 fig = make_problem_setup_figure_plotly(
@@ -258,6 +287,7 @@ def main() -> None:
                     "roi_n": int(roi_points_n),
                     "roi_rotate": bool(roi_rotate),
                     "sym_axes": tuple(sym_axes),
+                    "sampler": roi_sampler,
                     "roi_dedup": bool(roi_dedup),
                     "roi_dedup_eps": float(roi_dedup_eps),
                 },
@@ -329,6 +359,18 @@ def main() -> None:
             return
 
         import matplotlib.pyplot as plt
+
+        def _extend_field(field: ContourField) -> ContourField:
+            X_ext, Y_ext, S_ext = periodic_theta_extend(field.X, field.Y, field.S)
+            return ContourField(name=field.name, X=X_ext, Y=Y_ext, S=S_ext)
+
+        surface_type = config.get("surface_type") or config.get("surface")
+        if surface_type == "disk_polar":
+            fields = [_extend_field(field) for field in fields]
+        else:
+            fields = [
+                _extend_field(field) if field.name == "S_polar" else field for field in fields
+            ]
 
         for field in fields:
             fig, ax = plt.subplots(figsize=(5, 4))

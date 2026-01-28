@@ -23,6 +23,8 @@ from gradientcoil.physics.emdm import build_A_xyz
 from gradientcoil.physics.roi_sampling import (
     dedup_points_with_weights,
     hammersley_sphere,
+    sample_sphere_fibonacci,
+    sample_sphere_sym_hammersley,
     symmetrize_points,
 )
 from gradientcoil.surfaces.cylinder_unwrap import (
@@ -55,6 +57,7 @@ class DebugBundleConfig:
     roi_radius: float = 0.1
     roi_n: int = 64
     sym_axes: tuple[str, ...] = ("x", "y", "z")
+    roi_sampler: str = "hammersley"
     roi_dedup: bool = False
     roi_dedup_eps: float = 1e-12
     shim_max_order: int = 2
@@ -178,7 +181,12 @@ def generate_debug_bundle(cfg: DebugBundleConfig) -> Path:
         surface_data[f"scale_v_{idx}"] = surface.scale_v
     np.savez(out_dir / "surface.npz", **surface_data)
 
-    roi_points = hammersley_sphere(cfg.roi_n, cfg.roi_radius, rotate=False)
+    if cfg.roi_sampler == "fibonacci":
+        roi_points = sample_sphere_fibonacci(cfg.roi_n, cfg.roi_radius, rotate=False)
+    elif cfg.roi_sampler == "sym_hammersley":
+        roi_points = sample_sphere_sym_hammersley(cfg.roi_n, cfg.roi_radius, sym_axes=cfg.sym_axes)
+    else:
+        roi_points = hammersley_sphere(cfg.roi_n, cfg.roi_radius, rotate=False)
     roi_points_raw = symmetrize_points(roi_points, axes=cfg.sym_axes)
     if cfg.roi_dedup:
         roi_points, roi_weights = dedup_points_with_weights(roi_points_raw, cfg.roi_dedup_eps)
@@ -190,6 +198,7 @@ def generate_debug_bundle(cfg: DebugBundleConfig) -> Path:
         points_raw=roi_points_raw,
         points=roi_points,
         weights=roi_weights,
+        sampler=np.asarray(cfg.roi_sampler, dtype="<U32"),
         dedup_enabled=cfg.roi_dedup,
         dedup_eps=float(cfg.roi_dedup_eps),
     )
@@ -298,6 +307,7 @@ def generate_debug_bundle(cfg: DebugBundleConfig) -> Path:
             roi_points,
             points_raw=roi_points_raw,
             weights=roi_weights,
+            sampler=cfg.roi_sampler,
             dedup_enabled=cfg.roi_dedup,
             dedup_eps=float(cfg.roi_dedup_eps),
         ),
@@ -349,6 +359,11 @@ def parse_args(argv: list[str] | None = None) -> DebugBundleConfig:
     parser.add_argument("--roi-radius", type=float, default=0.1)
     parser.add_argument("--roi-n", type=int, default=64)
     parser.add_argument("--sym-axes", default="x,y,z")
+    parser.add_argument(
+        "--roi-sampler",
+        choices=["hammersley", "fibonacci", "sym_hammersley"],
+        default="hammersley",
+    )
     parser.add_argument("--roi-dedup", action="store_true")
     parser.add_argument("--roi-dedup-eps", type=float, default=1e-12)
 
@@ -387,6 +402,7 @@ def parse_args(argv: list[str] | None = None) -> DebugBundleConfig:
         roi_radius=args.roi_radius,
         roi_n=args.roi_n,
         sym_axes=sym_axes or ("x", "y", "z"),
+        roi_sampler=args.roi_sampler,
         roi_dedup=args.roi_dedup,
         roi_dedup_eps=args.roi_dedup_eps,
         shim_max_order=args.shim_max_order,

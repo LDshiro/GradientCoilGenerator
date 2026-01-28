@@ -24,7 +24,7 @@ class SocpBzSpec:
     gradient_scheme_tv: str = "forward"
     gradient_scheme_power: str = "forward"
     gradient_rows_pitch: str = "active"
-    gradient_rows_tv: str = "interior"
+    gradient_rows_tv: str = "active"
     gradient_rows_power: str = "active"
     emdm_mode: str = "shared"
     verbose: bool = False
@@ -146,9 +146,12 @@ def solve_socp_bz(
             )
 
     if spec.use_tv:
+        rows_tv = spec.gradient_rows_tv
+        if spec.gradient_scheme_tv == "forward":
+            rows_tv = "interior"
         D_tv, _ = _build_gradient_block(
             surfaces,
-            rows_mode=spec.gradient_rows_tv,
+            rows_mode=rows_tv,
             emdm_mode=spec.emdm_mode,
             scheme=spec.gradient_scheme_tv,
         )

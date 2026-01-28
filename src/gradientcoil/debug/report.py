@@ -41,6 +41,7 @@ def summarize_roi(
     *,
     points_raw: Array | None = None,
     weights: Array | None = None,
+    sampler: str | None = None,
     dedup_enabled: bool = False,
     dedup_eps: float = 0.0,
 ) -> dict:
@@ -57,6 +58,7 @@ def summarize_roi(
         "roi_count_used": count_used,
         "roi_unique_count": count_used,
         "roi_weights_sum": weights_sum,
+        "roi_sampler": sampler,
         "roi_dedup_enabled": bool(dedup_enabled),
         "roi_dedup_eps": float(dedup_eps),
         "radius_min": float(np.min(r)),
@@ -134,6 +136,7 @@ def write_summary_md(path: Path, summary: dict) -> None:
     lines.append("## ROI")
     roi = summary.get("roi", {})
     lines.append(f"- count: {roi.get('count', 0)}")
+    lines.append(f"- roi_sampler: {roi.get('roi_sampler')}")
     lines.append(f"- roi_count_raw: {roi.get('roi_count_raw')}")
     lines.append(f"- roi_count_used: {roi.get('roi_count_used')}")
     lines.append(f"- roi_weights_sum: {roi.get('roi_weights_sum')}")
