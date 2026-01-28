@@ -20,9 +20,12 @@ class SocpBzSpec:
     use_power: bool = False
     lambda_pwr: float = 0.0
     r_sheet: float = 1.0
+    gradient_scheme_pitch: str = "forward"
+    gradient_scheme_tv: str = "forward"
+    gradient_scheme_power: str = "forward"
     gradient_rows_pitch: str = "active"
     gradient_rows_tv: str = "interior"
-    gradient_rows_power: str = "interior"
+    gradient_rows_power: str = "active"
     emdm_mode: str = "shared"
     verbose: bool = False
     max_iter: int | None = None
@@ -60,13 +63,14 @@ def _build_gradient_block(
     *,
     rows_mode: str,
     emdm_mode: str,
+    scheme: str,
 ) -> tuple[object, np.ndarray]:
     if emdm_mode == "shared":
-        op = build_gradient_operator(surfaces[0], rows=rows_mode)
+        op = build_gradient_operator(surfaces[0], rows=rows_mode, scheme=scheme)
         areas = surfaces[0].areas_uv[op.row_coords[:, 0], op.row_coords[:, 1]]
         return op.D, areas
 
-    ops = [build_gradient_operator(surface, rows=rows_mode) for surface in surfaces]
+    ops = [build_gradient_operator(surface, rows=rows_mode, scheme=scheme) for surface in surfaces]
     D = block_diag([op.D for op in ops], format="csr")
     area_list = [
         surface.areas_uv[op.row_coords[:, 0], op.row_coords[:, 1]]
@@ -132,6 +136,7 @@ def solve_socp_bz(
             surfaces,
             rows_mode=spec.gradient_rows_pitch,
             emdm_mode=spec.emdm_mode,
+            scheme=spec.gradient_scheme_pitch,
         )
         g_pitch = D_pitch @ s
         nrows_pitch = g_pitch.shape[0] // 2
@@ -145,6 +150,7 @@ def solve_socp_bz(
             surfaces,
             rows_mode=spec.gradient_rows_tv,
             emdm_mode=spec.emdm_mode,
+            scheme=spec.gradient_scheme_tv,
         )
         g_tv = D_tv @ s
         nrows_tv = g_tv.shape[0] // 2
@@ -158,6 +164,7 @@ def solve_socp_bz(
             surfaces,
             rows_mode=spec.gradient_rows_power,
             emdm_mode=spec.emdm_mode,
+            scheme=spec.gradient_scheme_power,
         )
         g_pwr = D_pwr @ s
         nrows_pwr = g_pwr.shape[0] // 2

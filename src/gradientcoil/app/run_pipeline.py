@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 
@@ -148,6 +148,11 @@ def run_optimization_pipeline(
     bz_target = target_spec.evaluate(roi_points)
 
     _progress(progress_cb, "solve", "running SOCP solver")
+    default_scheme = "central" if config["surface_type"] == "plane_cart" else "forward"
+    scheme_pitch = config["spec"].get("gradient_scheme_pitch", default_scheme)
+    scheme_tv = config["spec"].get("gradient_scheme_tv", default_scheme)
+    scheme_power = config["spec"].get("gradient_scheme_power", default_scheme)
+
     spec = SocpBzSpec(
         use_tv=config["spec"]["use_tv"],
         lambda_tv=float(config["spec"]["lambda_tv"]),
@@ -156,6 +161,9 @@ def run_optimization_pipeline(
         use_power=config["spec"]["use_power"],
         lambda_pwr=float(config["spec"]["lambda_pwr"]),
         r_sheet=float(config["spec"]["r_sheet"]),
+        gradient_scheme_pitch=scheme_pitch,
+        gradient_scheme_tv=scheme_tv,
+        gradient_scheme_power=scheme_power,
         emdm_mode=config["spec"]["emdm_mode"],
         verbose=config["solver"]["verbose"],
         max_iter=config["solver"]["max_iter"],

@@ -153,6 +153,12 @@ def main() -> None:
             use_power = st.checkbox("use_power", value=False)
             lambda_pwr = st.number_input("lambda_pwr", min_value=0.0, value=0.0, format="%.2e")
             r_sheet = st.number_input("r_sheet", min_value=0.0, value=0.000492, format="%.6f")
+            default_scheme = "central" if surface_type == "plane_cart" else "forward"
+            grad_scheme = st.selectbox(
+                "gradient_scheme",
+                options=["forward", "central"],
+                index=0 if default_scheme == "forward" else 1,
+            )
             emdm_mode = st.selectbox("emdm_mode", ["shared", "concat"], index=0)
 
             st.markdown("### Solver")
@@ -184,6 +190,7 @@ def main() -> None:
                 "use_power": use_power,
                 "lambda_pwr": lambda_pwr,
                 "r_sheet": r_sheet,
+                "gradient_scheme": grad_scheme,
                 "emdm_mode": emdm_mode,
                 "max_iter": max_iter,
                 "solver_verbose": solver_verbose,
@@ -239,7 +246,6 @@ def main() -> None:
 
             gap = 2.0 * float(params.get("z_offset", 0.0)) if params.get("use_two_planes") else 0.0
             J_max = float(delta_s / pitch_min) if (use_pitch and pitch_min > 0.0) else 0.0
-
             config = {
                 "out_dir": str(ROOT / "runs"),
                 "surface_type": surface_type,
@@ -269,6 +275,9 @@ def main() -> None:
                     "use_power": bool(use_power),
                     "lambda_pwr": float(lambda_pwr),
                     "r_sheet": float(r_sheet),
+                    "gradient_scheme_pitch": grad_scheme,
+                    "gradient_scheme_tv": grad_scheme,
+                    "gradient_scheme_power": grad_scheme,
                     "emdm_mode": emdm_mode,
                 },
                 "solver": {

@@ -145,6 +145,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--use-power", action="store_true")
     parser.add_argument("--lambda-pwr", type=float, default=0.0)
     parser.add_argument("--r-sheet", type=float, default=0.000492)
+    parser.add_argument(
+        "--grad-scheme",
+        choices=["forward", "central"],
+        default=None,
+        help="Gradient scheme for pitch/tv/power (default: plane_cart=central, others=forward).",
+    )
+    parser.add_argument("--grad-scheme-pitch", choices=["forward", "central"], default=None)
+    parser.add_argument("--grad-scheme-tv", choices=["forward", "central"], default=None)
+    parser.add_argument("--grad-scheme-power", choices=["forward", "central"], default=None)
 
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--max-iter", type=int, default=None)
@@ -184,6 +193,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         J_max = 0.0
 
+    default_scheme = "central" if args.surface == "plane_cart" else "forward"
+    grad_scheme = args.grad_scheme or default_scheme
+    grad_scheme_pitch = args.grad_scheme_pitch or grad_scheme
+    grad_scheme_tv = args.grad_scheme_tv or grad_scheme
+    grad_scheme_power = args.grad_scheme_power or grad_scheme
+
     spec = SocpBzSpec(
         use_tv=args.use_tv,
         lambda_tv=float(args.lambda_tv),
@@ -192,6 +207,9 @@ def main(argv: list[str] | None = None) -> int:
         use_power=args.use_power,
         lambda_pwr=float(args.lambda_pwr),
         r_sheet=float(args.r_sheet),
+        gradient_scheme_pitch=grad_scheme_pitch,
+        gradient_scheme_tv=grad_scheme_tv,
+        gradient_scheme_power=grad_scheme_power,
         emdm_mode=args.emdm_mode,
         verbose=args.verbose,
         max_iter=args.max_iter,
@@ -231,6 +249,9 @@ def main(argv: list[str] | None = None) -> int:
         "use_power": bool(args.use_power),
         "lambda_pwr": float(args.lambda_pwr),
         "r_sheet": float(args.r_sheet),
+        "gradient_scheme_pitch": grad_scheme_pitch,
+        "gradient_scheme_tv": grad_scheme_tv,
+        "gradient_scheme_power": grad_scheme_power,
         "solver": "CLARABEL",
         "max_iter": args.max_iter,
         "time_limit": args.time_limit,
