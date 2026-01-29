@@ -183,6 +183,16 @@ def main() -> None:
             alpha1_tgv = st.number_input("alpha1_tgv", min_value=0.0, value=1.0e-6, format="%.3e")
             alpha0_tgv = st.number_input("alpha0_tgv", min_value=0.0, value=1.0e-6, format="%.3e")
             tgv_area_weights = st.checkbox("tgv_area_weights", value=True)
+            with st.expander("Curvature regularizer (grad-grad)", expanded=False):
+                st.caption("隣接勾配差分（曲がり）を抑える。R1はSOCP、ENは二次項。")
+                use_curv_r1 = st.checkbox("use_curv_r1", value=False)
+                lambda_curv_r1 = st.number_input(
+                    "lambda_curv_r1", min_value=0.0, value=0.0, format="%.2e"
+                )
+                use_curv_en = st.checkbox("use_curv_en", value=False)
+                lambda_curv_en = st.number_input(
+                    "lambda_curv_en", min_value=0.0, value=0.0, format="%.2e"
+                )
             r_sheet = st.number_input("r_sheet", min_value=0.0, value=0.000492, format="%.6f")
             default_scheme = "central" if surface_type == "plane_cart" else "forward"
             grad_scheme = st.selectbox(
@@ -225,6 +235,10 @@ def main() -> None:
                 "alpha1_tgv": alpha1_tgv,
                 "alpha0_tgv": alpha0_tgv,
                 "tgv_area_weights": tgv_area_weights,
+                "use_curv_r1": use_curv_r1,
+                "lambda_curv_r1": lambda_curv_r1,
+                "use_curv_en": use_curv_en,
+                "lambda_curv_en": lambda_curv_en,
                 "r_sheet": r_sheet,
                 "gradient_scheme": grad_scheme,
                 "gradient_scheme_tgv": grad_scheme,
@@ -298,6 +312,10 @@ def main() -> None:
                         alpha1_tgv=float(alpha1_tgv),
                         alpha0_tgv=float(alpha0_tgv),
                         tgv_area_weights=bool(tgv_area_weights),
+                        use_curv_r1=bool(use_curv_r1),
+                        lambda_curv_r1=float(lambda_curv_r1),
+                        use_curv_en=bool(use_curv_en),
+                        lambda_curv_en=float(lambda_curv_en),
                         gradient_scheme_tgv=grad_scheme,
                         gradient_scheme_pitch=grad_scheme,
                         gradient_scheme_tv=grad_scheme,
@@ -312,6 +330,8 @@ def main() -> None:
                             "tv": use_tv,
                             "power": use_power,
                             "tgv": use_tgv,
+                            "curv_r1": use_curv_r1,
+                            "curv_en": use_curv_en,
                         }.items()
                         if enabled
                     ]
@@ -379,6 +399,10 @@ def main() -> None:
                     "alpha1_tgv": float(alpha1_tgv),
                     "alpha0_tgv": float(alpha0_tgv),
                     "tgv_area_weights": bool(tgv_area_weights),
+                    "use_curv_r1": bool(use_curv_r1),
+                    "lambda_curv_r1": float(lambda_curv_r1),
+                    "use_curv_en": bool(use_curv_en),
+                    "lambda_curv_en": float(lambda_curv_en),
                     "r_sheet": float(r_sheet),
                     "grad_scheme": grad_scheme,
                     "gradient_scheme_tgv": grad_scheme,

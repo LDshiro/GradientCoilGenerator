@@ -29,6 +29,10 @@ class SocpBzSpec:
     tgv_area_weights: bool = True
     gradient_rows_tgv: str = "interior"
     gradient_scheme_tgv: str = "forward"
+    use_curv_r1: bool = False
+    lambda_curv_r1: float = 0.0
+    use_curv_en: bool = False
+    lambda_curv_en: float = 0.0
     gradient_scheme_pitch: str = "forward"
     gradient_scheme_tv: str = "forward"
     gradient_scheme_power: str = "forward"
@@ -302,6 +306,30 @@ def estimate_socp_bz_problem_size(
             constraints["tgv_u1"] = nrows
             constraints["tgv_u0"] = nrows
 
+    if spec.lambda_curv_r1 < 0.0 or spec.lambda_curv_en < 0.0:
+        raise ValueError("Curvature regularizer lambdas must be non-negative.")
+    if spec.lambda_curv_r1 < 0.0 or spec.lambda_curv_en < 0.0:
+        raise ValueError("Curvature regularizer lambdas must be non-negative.")
+    use_curv = spec.use_curv_r1 or spec.use_curv_en
+    if use_curv:
+        D_curv, _ = _build_gradient_block(
+            surfaces,
+            rows_mode="interior",
+            emdm_mode=spec.emdm_mode,
+            scheme="forward",
+        )
+        nrows = int(D_curv.shape[0] // 2)
+        if nrows != n_unknown:
+            raise ValueError(
+                "Curvature regularizer requires rows_mode='interior' so that nrows == n_unknown."
+            )
+        if spec.use_curv_r1:
+            variables["curv_u"] = nrows
+            n_nonneg += nrows
+            constraints["curv_r1"] = nrows
+        if spec.use_curv_en and spec.lambda_curv_en > 0.0:
+            constraints["curv_en"] = 0
+
     n_variables = int(sum(variables.values()))
     n_constraints = int(sum(constraints.values()))
     return SocpBzProblemSize(
@@ -566,6 +594,37 @@ def solve_socp_bz(
             else:
                 tgv_term = spec.alpha1_tgv * cp.sum(u1) + spec.alpha0_tgv * cp.sum(u0)
             obj_terms.append(tgv_term)
+
+    use_curv = spec.use_curv_r1 or spec.use_curv_en
+    if use_curv:
+        D_curv, _ = _build_gradient_block(
+            surfaces,
+            rows_mode="interior",
+            emdm_mode=spec.emdm_mode,
+            scheme="forward",
+        )
+        nrows = D_curv.shape[0] // 2
+        if D_curv.shape[0] != 2 * nrows or D_curv.shape[1] != n_unknown:
+            raise RuntimeError("Curvature gradient operator shape mismatch.")
+        if nrows != n_unknown:
+            raise RuntimeError(
+                "Curvature regularizer requires rows_mode='interior' so that nrows == n_unknown."
+            )
+
+        g = D_curv @ s
+        g_u = g[0::2]
+        g_v = g[1::2]
+        Dg_u = D_curv @ g_u
+        Dg_v = D_curv @ g_v
+
+        if spec.use_curv_r1:
+            H4 = cp.vstack([Dg_u[0::2], Dg_u[1::2], Dg_v[0::2], Dg_v[1::2]]).T
+            u_curv = cp.Variable(nrows, nonneg=True)
+            constraints.append(cp.norm(H4, 2, axis=1) <= u_curv)
+            obj_terms.append(spec.lambda_curv_r1 * cp.sum(u_curv))
+
+        if spec.use_curv_en and spec.lambda_curv_en > 0.0:
+            obj_terms.append(spec.lambda_curv_en * (cp.sum_squares(Dg_u) + cp.sum_squares(Dg_v)))
 
     objective = cp.Minimize(cp.sum(cp.hstack(obj_terms)))
     problem = cp.Problem(objective, constraints)

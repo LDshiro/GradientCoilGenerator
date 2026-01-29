@@ -158,6 +158,10 @@ def main(argv: list[str] | None = None) -> int:
     tgv_group = parser.add_mutually_exclusive_group()
     tgv_group.add_argument("--tgv-area-weights", action="store_true", default=True)
     tgv_group.add_argument("--no-tgv-area-weights", action="store_false", dest="tgv_area_weights")
+    parser.add_argument("--use-curv-r1", action="store_true")
+    parser.add_argument("--lambda-curv-r1", type=float, default=0.0)
+    parser.add_argument("--use-curv-en", action="store_true")
+    parser.add_argument("--lambda-curv-en", type=float, default=0.0)
     parser.add_argument(
         "--grad-scheme",
         choices=["forward", "central", "edge"],
@@ -230,6 +234,10 @@ def main(argv: list[str] | None = None) -> int:
         alpha1_tgv=float(args.alpha1_tgv),
         alpha0_tgv=float(args.alpha0_tgv),
         tgv_area_weights=bool(args.tgv_area_weights),
+        use_curv_r1=bool(args.use_curv_r1),
+        lambda_curv_r1=float(args.lambda_curv_r1),
+        use_curv_en=bool(args.use_curv_en),
+        lambda_curv_en=float(args.lambda_curv_en),
         gradient_scheme_tgv=grad_scheme_tgv,
         gradient_scheme_pitch=grad_scheme_pitch,
         gradient_scheme_tv=grad_scheme_tv,
@@ -278,6 +286,10 @@ def main(argv: list[str] | None = None) -> int:
         "alpha1_tgv": float(args.alpha1_tgv),
         "alpha0_tgv": float(args.alpha0_tgv),
         "tgv_area_weights": bool(args.tgv_area_weights),
+        "use_curv_r1": bool(args.use_curv_r1),
+        "lambda_curv_r1": float(args.lambda_curv_r1),
+        "use_curv_en": bool(args.use_curv_en),
+        "lambda_curv_en": float(args.lambda_curv_en),
         "grad_scheme": args.grad_scheme,
         "gradient_scheme_tgv": grad_scheme_tgv,
         "gradient_scheme_pitch": grad_scheme_pitch,
