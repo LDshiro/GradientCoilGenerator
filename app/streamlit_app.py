@@ -435,6 +435,8 @@ def main() -> None:
             st.warning("可視化できるデータが見つかりません。")
             return
 
+        import io
+
         import matplotlib.pyplot as plt
 
         def _extend_field(field: ContourField) -> ContourField:
@@ -450,14 +452,18 @@ def main() -> None:
             ]
 
         for field in fields:
-            fig, ax = plt.subplots(figsize=(4, 3), dpi=180)
+            fig, ax = plt.subplots(figsize=(6, 4), dpi=360)
             levels = 60
             cs = ax.contourf(field.X, field.Y, field.S, levels=levels)
             ax.contour(field.X, field.Y, field.S, levels=levels, colors="k", linewidths=0.6)
             fig.colorbar(cs, ax=ax)
             ax.set_title(field.name)
             ax.set_aspect("equal", adjustable="box")
-            st.pyplot(fig)
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", dpi=360, bbox_inches="tight")
+            buf.seek(0)
+            st.image(buf, width=600)
+            plt.close(fig)
 
 
 if __name__ == "__main__":
