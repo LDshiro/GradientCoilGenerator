@@ -148,6 +148,7 @@ def build_edge_difference_operator(
     *,
     rows: str = "interior",
     boundary_value: float = 0.0,
+    bidirectional: bool = False,
 ) -> EdgeDifferenceOperator:
     """Build an edge-based difference operator using interior-to-neighbor edges."""
     if boundary_value != 0.0:
@@ -213,24 +214,32 @@ def build_edge_difference_operator(
                     return None
         return iu, iv
 
+    def edge_scale(iu0: int, iv0: int, iu1: int, iv1: int, edge_dir: int) -> float:
+        if edge_dir == 0:
+            h = 0.5 * (surface.scale_u[iu0, iv0] + surface.scale_u[iu1, iv1])
+        else:
+            h = 0.5 * (surface.scale_v[iu0, iv0] + surface.scale_v[iu1, iv1])
+        if h <= 0.0:
+            raise ValueError("scale_u/scale_v must be positive.")
+        return h
+
+    directions = ((1, 0, 0), (-1, 0, 0), (0, 1, 1), (0, -1, 1))
+
     for iu, iv in coords_int:
         k0 = int(surface.idx_map[iu, iv])
         if k0 < 0:
             continue
 
-        # Positive directions: include interior-interior and interior-boundary edges
-        for du, dv, edge_dir in ((1, 0, 0), (0, 1, 1)):
+        for du, dv, edge_dir in directions:
             nb = neighbor_index(iu, iv, du, dv)
             if nb is None:
                 continue
             iu1, iv1 = nb
             if surface.idx_map[iu1, iv1] >= 0:
+                if not bidirectional and (du < 0 or dv < 0):
+                    continue
                 k1 = int(surface.idx_map[iu1, iv1])
-                h = 0.5 * (surface.scale_u[iu, iv] + surface.scale_u[iu1, iv1])
-                if edge_dir == 1:
-                    h = 0.5 * (surface.scale_v[iu, iv] + surface.scale_v[iu1, iv1])
-                if h <= 0.0:
-                    raise ValueError("scale_u/scale_v must be positive.")
+                h = edge_scale(iu, iv, iu1, iv1, edge_dir)
                 edge_area = 0.5 * (surface.areas_uv[iu, iv] + surface.areas_uv[iu1, iv1])
                 add_edge(
                     k0=k0,
@@ -242,34 +251,7 @@ def build_edge_difference_operator(
                     uv1=(iu1, iv1),
                 )
             elif surface.boundary_mask[iu1, iv1]:
-                h = 0.5 * (surface.scale_u[iu, iv] + surface.scale_u[iu1, iv1])
-                if edge_dir == 1:
-                    h = 0.5 * (surface.scale_v[iu, iv] + surface.scale_v[iu1, iv1])
-                if h <= 0.0:
-                    raise ValueError("scale_u/scale_v must be positive.")
-                edge_area = 0.5 * (surface.areas_uv[iu, iv] + surface.areas_uv[iu1, iv1])
-                add_edge(
-                    k0=k0,
-                    k1=-1,
-                    inv_h=1.0 / h,
-                    edge_area=edge_area,
-                    edge_dir=edge_dir,
-                    uv0=(iu, iv),
-                    uv1=(iu1, iv1),
-                )
-
-        # Negative directions: include only interior-boundary edges to avoid duplicates
-        for du, dv, edge_dir in ((-1, 0, 0), (0, -1, 1)):
-            nb = neighbor_index(iu, iv, du, dv)
-            if nb is None:
-                continue
-            iu1, iv1 = nb
-            if surface.boundary_mask[iu1, iv1]:
-                h = 0.5 * (surface.scale_u[iu, iv] + surface.scale_u[iu1, iv1])
-                if edge_dir == 1:
-                    h = 0.5 * (surface.scale_v[iu, iv] + surface.scale_v[iu1, iv1])
-                if h <= 0.0:
-                    raise ValueError("scale_u/scale_v must be positive.")
+                h = edge_scale(iu, iv, iu1, iv1, edge_dir)
                 edge_area = 0.5 * (surface.areas_uv[iu, iv] + surface.areas_uv[iu1, iv1])
                 add_edge(
                     k0=k0,

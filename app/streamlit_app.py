@@ -104,10 +104,13 @@ def main() -> None:
 
     from gradientcoil.app.run_pipeline import run_optimization_pipeline
     from gradientcoil.io.results_npz import ContourField, extract_contour_fields
+    from gradientcoil.optimize.socp_bz import SocpBzSpec, estimate_socp_bz_problem_size
     from gradientcoil.physics.roi_sampling import (
+        dedup_points_with_weights,
         hammersley_sphere,
         sample_sphere_fibonacci,
         sample_sphere_sym_hammersley,
+        symmetrize_points,
     )
     from gradientcoil.runs.listing import list_runs, load_run_config, load_run_npz, load_run_solver
     from gradientcoil.viz.mesh import periodic_theta_extend
@@ -162,16 +165,16 @@ def main() -> None:
 
             st.markdown("### Regularizers")
             use_pitch = st.checkbox("use_pitch", value=False)
-            delta_s = st.number_input("delta_S", min_value=0.0, value=0.0, format="%.4f")
-            pitch_min = st.number_input("pitch_min", min_value=0.0, value=0.0, format="%.4f")
+            delta_s = st.number_input("delta_S", min_value=0.0, value=0.0020, format="%.4f")
+            pitch_min = st.number_input("pitch_min", min_value=0.0, value=0.0001, format="%.4f")
             use_tv_default = surface_type == "disk_polar"
-            lambda_tv_default = 1.00e-6 if surface_type == "disk_polar" else 0.0
+            lambda_tv_default = 5.00e-8
             use_tv = st.checkbox("use_tv", value=use_tv_default)
             lambda_tv = st.number_input(
                 "lambda_tv", min_value=0.0, value=lambda_tv_default, format="%.2e"
             )
             use_power_default = surface_type in {"cylinder_unwrap", "disk_polar"}
-            lambda_pwr_default = 2.00e-2 if surface_type == "cylinder_unwrap" else 4.00e-2
+            lambda_pwr_default = 3.00e-2
             use_power = st.checkbox("use_power", value=use_power_default)
             lambda_pwr = st.number_input(
                 "lambda_pwr", min_value=0.0, value=lambda_pwr_default, format="%.2e"
@@ -272,6 +275,53 @@ def main() -> None:
                 )
                 fig.update_layout(height=700)
                 st.plotly_chart(fig, use_container_width=True)
+
+                if roi_points is not None:
+                    roi_points_raw = symmetrize_points(roi_points, axes=tuple(sym_axes))
+                    if roi_dedup:
+                        roi_points_used, _ = dedup_points_with_weights(
+                            roi_points_raw, roi_dedup_eps
+                        )
+                    else:
+                        roi_points_used = roi_points_raw
+
+                    J_max = float(delta_s / pitch_min) if (use_pitch and pitch_min > 0.0) else 0.0
+                    size_spec = SocpBzSpec(
+                        use_tv=bool(use_tv),
+                        lambda_tv=float(lambda_tv),
+                        use_pitch=bool(use_pitch),
+                        J_max=float(J_max),
+                        use_power=bool(use_power),
+                        lambda_pwr=float(lambda_pwr),
+                        r_sheet=float(r_sheet),
+                        use_tgv=bool(use_tgv),
+                        alpha1_tgv=float(alpha1_tgv),
+                        alpha0_tgv=float(alpha0_tgv),
+                        tgv_area_weights=bool(tgv_area_weights),
+                        gradient_scheme_tgv=grad_scheme,
+                        gradient_scheme_pitch=grad_scheme,
+                        gradient_scheme_tv=grad_scheme,
+                        gradient_scheme_power=grad_scheme,
+                        emdm_mode=emdm_mode,
+                    )
+                    size = estimate_socp_bz_problem_size(roi_points_used, surfaces, size_spec)
+                    active_terms = [
+                        name
+                        for name, enabled in {
+                            "pitch": use_pitch,
+                            "tv": use_tv,
+                            "power": use_power,
+                            "tgv": use_tgv,
+                        }.items()
+                        if enabled
+                    ]
+                    st.markdown("### 最適化サイズ")
+                    st.caption(f"有効項目: {', '.join(active_terms) if active_terms else 'なし'}")
+                    st.write(
+                        f"変数数: {size.n_variables} (非負制約付き: {size.n_nonneg}) / "
+                        f"制約数: {size.n_constraints}"
+                    )
+                    st.json({"variables": size.variables, "constraints": size.constraints})
             except Exception as exc:
                 st.error(f"可視化に失敗しました: {exc}")
 

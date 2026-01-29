@@ -50,6 +50,15 @@ class SocpBzResult:
     solver_stats: dict
 
 
+@dataclass
+class SocpBzProblemSize:
+    n_variables: int
+    n_constraints: int
+    n_nonneg: int
+    variables: dict[str, int]
+    constraints: dict[str, int]
+
+
 def _solver_stats_dict(stats: object | None) -> dict:
     if stats is None:
         return {}
@@ -96,12 +105,18 @@ def _build_edge_block(
     *,
     rows_mode: str,
     emdm_mode: str,
+    bidirectional: bool,
 ) -> tuple[object, np.ndarray]:
     if emdm_mode == "shared":
-        op = build_edge_difference_operator(surfaces[0], rows=rows_mode)
+        op = build_edge_difference_operator(
+            surfaces[0], rows=rows_mode, bidirectional=bidirectional
+        )
         return op.D, op.edge_areas
 
-    ops = [build_edge_difference_operator(surface, rows=rows_mode) for surface in surfaces]
+    ops = [
+        build_edge_difference_operator(surface, rows=rows_mode, bidirectional=bidirectional)
+        for surface in surfaces
+    ]
     D = block_diag([op.D for op in ops], format="csr")
     areas = np.concatenate([op.edge_areas for op in ops]) if ops else np.zeros((0,), dtype=float)
     return D, areas
@@ -112,10 +127,16 @@ def _build_edge_ops(
     *,
     rows_mode: str,
     emdm_mode: str,
+    bidirectional: bool,
 ) -> list:
     if emdm_mode == "shared":
-        return [build_edge_difference_operator(surfaces[0], rows=rows_mode)]
-    return [build_edge_difference_operator(surface, rows=rows_mode) for surface in surfaces]
+        return [
+            build_edge_difference_operator(surfaces[0], rows=rows_mode, bidirectional=bidirectional)
+        ]
+    return [
+        build_edge_difference_operator(surface, rows=rows_mode, bidirectional=bidirectional)
+        for surface in surfaces
+    ]
 
 
 def _build_line_graph_operator(op) -> tuple[csr_matrix, np.ndarray]:
@@ -150,6 +171,146 @@ def _build_line_graph_operator(op) -> tuple[csr_matrix, np.ndarray]:
         (data, (rows_idx, cols_idx)), shape=(len(edge_area_list), op.D.shape[0])
     ).tocsr()
     return D_line, np.asarray(edge_area_list, dtype=float)
+
+
+def estimate_socp_bz_problem_size(
+    points: np.ndarray,
+    surfaces: list[SurfaceGrid],
+    spec: SocpBzSpec,
+) -> SocpBzProblemSize:
+    if not surfaces:
+        raise ValueError("surfaces must be a non-empty list.")
+    if spec.emdm_mode not in {"shared", "concat"}:
+        raise ValueError("emdm_mode must be 'shared' or 'concat'.")
+
+    if spec.emdm_mode == "shared":
+        nints = {s.Nint for s in surfaces}
+        if len(nints) != 1:
+            raise ValueError("All surfaces must have same Nint for shared mode.")
+        n_unknown = surfaces[0].Nint
+    else:
+        n_unknown = int(sum(s.Nint for s in surfaces))
+
+    points = np.asarray(points, dtype=float)
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError("points must have shape (P, 3).")
+    n_points = int(points.shape[0])
+
+    variables: dict[str, int] = {"s": n_unknown, "t": n_points}
+    constraints: dict[str, int] = {"data_abs": 2 * n_points}
+    n_nonneg = n_points
+
+    if spec.use_pitch:
+        rows_pitch = spec.gradient_rows_pitch
+        if spec.gradient_scheme_pitch == "central":
+            rows_pitch = "interior"
+        if spec.gradient_scheme_pitch == "edge":
+            D_pitch, _ = _build_edge_block(
+                surfaces,
+                rows_mode=rows_pitch,
+                emdm_mode=spec.emdm_mode,
+                bidirectional=True,
+            )
+            constraints["pitch"] = 2 * int(D_pitch.shape[0])
+        else:
+            D_pitch, _ = _build_gradient_block(
+                surfaces,
+                rows_mode=rows_pitch,
+                emdm_mode=spec.emdm_mode,
+                scheme=spec.gradient_scheme_pitch,
+            )
+            nrows_pitch = int(D_pitch.shape[0] // 2)
+            constraints["pitch"] = nrows_pitch
+
+    if spec.use_tv:
+        rows_tv = spec.gradient_rows_tv
+        if spec.gradient_scheme_tv in {"forward", "central"}:
+            rows_tv = "interior"
+        if spec.gradient_scheme_tv == "edge":
+            D_tv, _ = _build_edge_block(
+                surfaces,
+                rows_mode=rows_tv,
+                emdm_mode=spec.emdm_mode,
+                bidirectional=True,
+            )
+            n_edges = int(D_tv.shape[0])
+            variables["tv_u"] = n_edges
+            n_nonneg += n_edges
+            constraints["tv"] = 2 * n_edges
+        else:
+            D_tv, _ = _build_gradient_block(
+                surfaces,
+                rows_mode=rows_tv,
+                emdm_mode=spec.emdm_mode,
+                scheme=spec.gradient_scheme_tv,
+            )
+            nrows_tv = int(D_tv.shape[0] // 2)
+            variables["tv_u"] = nrows_tv
+            n_nonneg += nrows_tv
+            constraints["tv"] = nrows_tv
+
+    if spec.use_power:
+        variables["pwr_p"] = 1
+        n_nonneg += 1
+        constraints["power"] = 1
+
+    if spec.use_tgv:
+        if spec.alpha1_tgv <= 0.0 or spec.alpha0_tgv <= 0.0:
+            raise ValueError("TGV requires alpha1_tgv > 0 and alpha0_tgv > 0.")
+        if spec.gradient_rows_tgv != "interior":
+            raise ValueError("TGV requires gradient_rows_tgv='interior'.")
+        if spec.gradient_scheme_tgv == "edge":
+            ops = _build_edge_ops(
+                surfaces,
+                rows_mode=spec.gradient_rows_tgv,
+                emdm_mode=spec.emdm_mode,
+                bidirectional=True,
+            )
+            if spec.emdm_mode == "shared":
+                op0 = ops[0]
+                n_edges = int(op0.D.shape[0])
+                D_line, _ = _build_line_graph_operator(op0)
+                n_line = int(D_line.shape[0])
+            else:
+                n_edges = int(sum(op.D.shape[0] for op in ops))
+                n_line = 0
+                for op in ops:
+                    D_line_i, _ = _build_line_graph_operator(op)
+                    n_line += int(D_line_i.shape[0])
+            variables["tgv_w"] = n_edges
+            variables["tgv_u1"] = n_edges
+            variables["tgv_u0"] = n_line
+            n_nonneg += n_edges + n_line
+            constraints["tgv_u1"] = 2 * n_edges
+            constraints["tgv_u0"] = 2 * n_line
+        else:
+            if spec.gradient_scheme_tgv not in {"forward", "central"}:
+                raise ValueError("gradient_scheme_tgv must be 'forward', 'central', or 'edge'.")
+            D_tgv, _ = _build_gradient_block(
+                surfaces,
+                rows_mode=spec.gradient_rows_tgv,
+                emdm_mode=spec.emdm_mode,
+                scheme=spec.gradient_scheme_tgv,
+            )
+            nrows = int(D_tgv.shape[0] // 2)
+            if nrows != n_unknown:
+                raise ValueError("TGV requires rows_mode='interior' so that nrows == n_unknown.")
+            variables["tgv_w"] = 2 * nrows
+            variables["tgv_u1"] = nrows
+            variables["tgv_u0"] = nrows
+            n_nonneg += 2 * nrows
+            constraints["tgv_u1"] = nrows
+            constraints["tgv_u0"] = nrows
+
+    n_variables = int(sum(variables.values()))
+    n_constraints = int(sum(constraints.values()))
+    return SocpBzProblemSize(
+        n_variables=n_variables,
+        n_constraints=n_constraints,
+        n_nonneg=n_nonneg,
+        variables=variables,
+        constraints=constraints,
+    )
 
 
 def solve_socp_bz(
@@ -208,7 +369,12 @@ def solve_socp_bz(
         if spec.gradient_scheme_pitch == "central":
             rows_pitch = "interior"
         if spec.gradient_scheme_pitch == "edge":
-            D_pitch, _ = _build_edge_block(surfaces, rows_mode=rows_pitch, emdm_mode=spec.emdm_mode)
+            D_pitch, _ = _build_edge_block(
+                surfaces,
+                rows_mode=rows_pitch,
+                emdm_mode=spec.emdm_mode,
+                bidirectional=True,
+            )
             g_pitch = D_pitch @ s
             constraints.append(g_pitch <= spec.J_max)
             constraints.append(-g_pitch <= spec.J_max)
@@ -231,7 +397,12 @@ def solve_socp_bz(
         if spec.gradient_scheme_tv in {"forward", "central"}:
             rows_tv = "interior"
         if spec.gradient_scheme_tv == "edge":
-            D_tv, _ = _build_edge_block(surfaces, rows_mode=rows_tv, emdm_mode=spec.emdm_mode)
+            D_tv, _ = _build_edge_block(
+                surfaces,
+                rows_mode=rows_tv,
+                emdm_mode=spec.emdm_mode,
+                bidirectional=True,
+            )
             g_tv = D_tv @ s
             u = cp.Variable(g_tv.shape[0], nonneg=True)
             constraints.append(g_tv <= u)
@@ -256,7 +427,12 @@ def solve_socp_bz(
         if spec.gradient_scheme_power == "central":
             rows_pwr = "interior"
         if spec.gradient_scheme_power == "edge":
-            D_pwr, areas = _build_edge_block(surfaces, rows_mode=rows_pwr, emdm_mode=spec.emdm_mode)
+            D_pwr, areas = _build_edge_block(
+                surfaces,
+                rows_mode=rows_pwr,
+                emdm_mode=spec.emdm_mode,
+                bidirectional=True,
+            )
             g_pwr = D_pwr @ s
             Wsqrt = np.sqrt(2.0 * spec.r_sheet * areas)
             if Wsqrt.shape[0] != g_pwr.shape[0]:
@@ -290,6 +466,7 @@ def solve_socp_bz(
                 surfaces,
                 rows_mode=spec.gradient_rows_tgv,
                 emdm_mode=spec.emdm_mode,
+                bidirectional=True,
             )
             if spec.emdm_mode == "shared":
                 op0 = ops[0]

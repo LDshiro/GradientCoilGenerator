@@ -26,7 +26,7 @@ def _mirror_perm_x(surface) -> np.ndarray:
 
 def test_edge_tgv_line_graph_symmetry_plane_cart() -> None:
     surface = build_plane_cart_surface(PlaneCartSurfaceConfig(PLANE_HALF=0.2, NX=8, NY=8))
-    op = build_edge_difference_operator(surface, rows="interior")
+    op = build_edge_difference_operator(surface, rows="interior", bidirectional=True)
     D_line, _ = _build_line_graph_operator(op)
     assert D_line.shape[0] > 0
 
