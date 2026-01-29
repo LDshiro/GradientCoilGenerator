@@ -241,6 +241,7 @@ def main() -> None:
                 "lambda_curv_en": lambda_curv_en,
                 "r_sheet": r_sheet,
                 "gradient_scheme": grad_scheme,
+                "gradient_scheme_curv": grad_scheme,
                 "gradient_scheme_tgv": grad_scheme,
                 "emdm_mode": emdm_mode,
                 "max_iter": max_iter,
@@ -316,6 +317,7 @@ def main() -> None:
                         lambda_curv_r1=float(lambda_curv_r1),
                         use_curv_en=bool(use_curv_en),
                         lambda_curv_en=float(lambda_curv_en),
+                        gradient_scheme_curv=grad_scheme,
                         gradient_scheme_tgv=grad_scheme,
                         gradient_scheme_pitch=grad_scheme,
                         gradient_scheme_tv=grad_scheme,
@@ -405,6 +407,7 @@ def main() -> None:
                     "lambda_curv_en": float(lambda_curv_en),
                     "r_sheet": float(r_sheet),
                     "grad_scheme": grad_scheme,
+                    "gradient_scheme_curv": grad_scheme,
                     "gradient_scheme_tgv": grad_scheme,
                     "gradient_scheme_pitch": grad_scheme,
                     "gradient_scheme_tv": grad_scheme,
@@ -486,7 +489,7 @@ def main() -> None:
             buf = io.BytesIO()
             fig.savefig(buf, format="png", dpi=360, bbox_inches="tight")
             buf.seek(0)
-            st.image(buf, width=600)
+            st.image(buf, width=1000)
             plt.close(fig)
 
 

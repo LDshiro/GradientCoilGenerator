@@ -33,6 +33,7 @@ class SocpBzSpec:
     lambda_curv_r1: float = 0.0
     use_curv_en: bool = False
     lambda_curv_en: float = 0.0
+    gradient_scheme_curv: str = "forward"
     gradient_scheme_pitch: str = "forward"
     gradient_scheme_tv: str = "forward"
     gradient_scheme_power: str = "forward"
@@ -312,12 +313,22 @@ def estimate_socp_bz_problem_size(
         raise ValueError("Curvature regularizer lambdas must be non-negative.")
     use_curv = spec.use_curv_r1 or spec.use_curv_en
     if use_curv:
-        D_curv, _ = _build_gradient_block(
-            surfaces,
-            rows_mode="interior",
-            emdm_mode=spec.emdm_mode,
-            scheme="forward",
-        )
+        if spec.gradient_scheme_curv == "edge":
+            D_curv, _ = _build_edge_block(
+                surfaces,
+                rows_mode="interior",
+                emdm_mode=spec.emdm_mode,
+                bidirectional=False,
+            )
+        else:
+            if spec.gradient_scheme_curv not in {"forward", "central"}:
+                raise ValueError("gradient_scheme_curv must be 'forward', 'central', or 'edge'.")
+            D_curv, _ = _build_gradient_block(
+                surfaces,
+                rows_mode="interior",
+                emdm_mode=spec.emdm_mode,
+                scheme=spec.gradient_scheme_curv,
+            )
         nrows = int(D_curv.shape[0] // 2)
         if nrows != n_unknown:
             raise ValueError(
@@ -597,12 +608,22 @@ def solve_socp_bz(
 
     use_curv = spec.use_curv_r1 or spec.use_curv_en
     if use_curv:
-        D_curv, _ = _build_gradient_block(
-            surfaces,
-            rows_mode="interior",
-            emdm_mode=spec.emdm_mode,
-            scheme="forward",
-        )
+        if spec.gradient_scheme_curv == "edge":
+            D_curv, _ = _build_edge_block(
+                surfaces,
+                rows_mode="interior",
+                emdm_mode=spec.emdm_mode,
+                bidirectional=False,
+            )
+        else:
+            if spec.gradient_scheme_curv not in {"forward", "central"}:
+                raise ValueError("gradient_scheme_curv must be 'forward', 'central', or 'edge'.")
+            D_curv, _ = _build_gradient_block(
+                surfaces,
+                rows_mode="interior",
+                emdm_mode=spec.emdm_mode,
+                scheme=spec.gradient_scheme_curv,
+            )
         nrows = D_curv.shape[0] // 2
         if D_curv.shape[0] != 2 * nrows or D_curv.shape[1] != n_unknown:
             raise RuntimeError("Curvature gradient operator shape mismatch.")

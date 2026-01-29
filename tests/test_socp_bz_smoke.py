@@ -102,6 +102,7 @@ def test_socp_bz_curv_r1_smoke_disk_polar() -> None:
     spec = SocpBzSpec(
         use_curv_r1=True,
         lambda_curv_r1=1e-4,
+        gradient_scheme_curv="edge",
         use_tv=False,
         use_pitch=False,
         use_power=False,

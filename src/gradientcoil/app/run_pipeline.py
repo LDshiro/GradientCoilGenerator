@@ -190,6 +190,7 @@ def run_optimization_pipeline(
         lambda_curv_r1=float(config["spec"].get("lambda_curv_r1", 0.0)),
         use_curv_en=bool(config["spec"].get("use_curv_en", False)),
         lambda_curv_en=float(config["spec"].get("lambda_curv_en", 0.0)),
+        gradient_scheme_curv=str(config["spec"].get("gradient_scheme_curv", base_scheme)),
         gradient_scheme_pitch=scheme_pitch,
         gradient_scheme_tv=scheme_tv,
         gradient_scheme_power=scheme_power,

@@ -172,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--grad-scheme-tv", choices=["forward", "central", "edge"], default=None)
     parser.add_argument("--grad-scheme-power", choices=["forward", "central", "edge"], default=None)
     parser.add_argument("--grad-scheme-tgv", choices=["forward", "central", "edge"], default=None)
+    parser.add_argument("--grad-scheme-curv", choices=["forward", "central", "edge"], default=None)
 
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--max-iter", type=int, default=None)
@@ -221,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
     grad_scheme_tv = args.grad_scheme_tv or grad_scheme
     grad_scheme_power = args.grad_scheme_power or grad_scheme
     grad_scheme_tgv = args.grad_scheme_tgv or grad_scheme
+    grad_scheme_curv = args.grad_scheme_curv or grad_scheme
 
     spec = SocpBzSpec(
         use_tv=args.use_tv,
@@ -238,6 +240,7 @@ def main(argv: list[str] | None = None) -> int:
         lambda_curv_r1=float(args.lambda_curv_r1),
         use_curv_en=bool(args.use_curv_en),
         lambda_curv_en=float(args.lambda_curv_en),
+        gradient_scheme_curv=grad_scheme_curv,
         gradient_scheme_tgv=grad_scheme_tgv,
         gradient_scheme_pitch=grad_scheme_pitch,
         gradient_scheme_tv=grad_scheme_tv,
@@ -291,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
         "use_curv_en": bool(args.use_curv_en),
         "lambda_curv_en": float(args.lambda_curv_en),
         "grad_scheme": args.grad_scheme,
+        "gradient_scheme_curv": grad_scheme_curv,
         "gradient_scheme_tgv": grad_scheme_tgv,
         "gradient_scheme_pitch": grad_scheme_pitch,
         "gradient_scheme_tv": grad_scheme_tv,
