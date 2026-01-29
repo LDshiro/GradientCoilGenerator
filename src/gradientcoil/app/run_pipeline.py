@@ -166,9 +166,10 @@ def run_optimization_pipeline(
 
     _progress(progress_cb, "solve", "running SOCP solver")
     default_scheme = "central" if config["surface_type"] == "plane_cart" else "forward"
-    scheme_pitch = config["spec"].get("gradient_scheme_pitch", default_scheme)
-    scheme_tv = config["spec"].get("gradient_scheme_tv", default_scheme)
-    scheme_power = config["spec"].get("gradient_scheme_power", default_scheme)
+    base_scheme = config["spec"].get("grad_scheme", default_scheme)
+    scheme_pitch = config["spec"].get("gradient_scheme_pitch", base_scheme)
+    scheme_tv = config["spec"].get("gradient_scheme_tv", base_scheme)
+    scheme_power = config["spec"].get("gradient_scheme_power", base_scheme)
 
     spec = SocpBzSpec(
         use_tv=config["spec"]["use_tv"],

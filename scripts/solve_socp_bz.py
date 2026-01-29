@@ -154,13 +154,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--r-sheet", type=float, default=0.000492)
     parser.add_argument(
         "--grad-scheme",
-        choices=["forward", "central"],
+        choices=["forward", "central", "edge"],
         default=None,
         help="Gradient scheme for pitch/tv/power (default: plane_cart=central, others=forward).",
     )
-    parser.add_argument("--grad-scheme-pitch", choices=["forward", "central"], default=None)
-    parser.add_argument("--grad-scheme-tv", choices=["forward", "central"], default=None)
-    parser.add_argument("--grad-scheme-power", choices=["forward", "central"], default=None)
+    parser.add_argument("--grad-scheme-pitch", choices=["forward", "central", "edge"], default=None)
+    parser.add_argument("--grad-scheme-tv", choices=["forward", "central", "edge"], default=None)
+    parser.add_argument("--grad-scheme-power", choices=["forward", "central", "edge"], default=None)
 
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--max-iter", type=int, default=None)
@@ -261,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         "use_power": bool(args.use_power),
         "lambda_pwr": float(args.lambda_pwr),
         "r_sheet": float(args.r_sheet),
+        "grad_scheme": args.grad_scheme,
         "gradient_scheme_pitch": grad_scheme_pitch,
         "gradient_scheme_tv": grad_scheme_tv,
         "gradient_scheme_power": grad_scheme_power,

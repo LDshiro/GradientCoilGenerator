@@ -1,5 +1,15 @@
 """Linear operators for SurfaceGrid."""
 
-from .gradient import GradientOperator, build_gradient_operator
+from .gradient import (
+    EdgeDifferenceOperator,
+    GradientOperator,
+    build_edge_difference_operator,
+    build_gradient_operator,
+)
 
-__all__ = ["GradientOperator", "build_gradient_operator"]
+__all__ = [
+    "EdgeDifferenceOperator",
+    "GradientOperator",
+    "build_edge_difference_operator",
+    "build_gradient_operator",
+]

@@ -180,7 +180,7 @@ def main() -> None:
             default_scheme = "central" if surface_type == "plane_cart" else "forward"
             grad_scheme = st.selectbox(
                 "gradient_scheme",
-                options=["forward", "central"],
+                options=["forward", "central", "edge"],
                 index=0 if default_scheme == "forward" else 1,
             )
             emdm_mode = st.selectbox("emdm_mode", ["shared", "concat"], index=0)
@@ -313,6 +313,7 @@ def main() -> None:
                     "use_power": bool(use_power),
                     "lambda_pwr": float(lambda_pwr),
                     "r_sheet": float(r_sheet),
+                    "grad_scheme": grad_scheme,
                     "gradient_scheme_pitch": grad_scheme,
                     "gradient_scheme_tv": grad_scheme,
                     "gradient_scheme_power": grad_scheme,
