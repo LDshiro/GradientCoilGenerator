@@ -132,9 +132,12 @@ def solve_socp_bz(
     obj_terms = [cp.sum(cp.multiply(weights, t))]
 
     if spec.use_pitch:
+        rows_pitch = spec.gradient_rows_pitch
+        if spec.gradient_scheme_pitch == "central":
+            rows_pitch = "interior"
         D_pitch, _ = _build_gradient_block(
             surfaces,
-            rows_mode=spec.gradient_rows_pitch,
+            rows_mode=rows_pitch,
             emdm_mode=spec.emdm_mode,
             scheme=spec.gradient_scheme_pitch,
         )
@@ -147,7 +150,7 @@ def solve_socp_bz(
 
     if spec.use_tv:
         rows_tv = spec.gradient_rows_tv
-        if spec.gradient_scheme_tv == "forward":
+        if spec.gradient_scheme_tv in {"forward", "central"}:
             rows_tv = "interior"
         D_tv, _ = _build_gradient_block(
             surfaces,
@@ -163,9 +166,12 @@ def solve_socp_bz(
         obj_terms.append(spec.lambda_tv * cp.sum(u))
 
     if spec.use_power:
+        rows_pwr = spec.gradient_rows_power
+        if spec.gradient_scheme_power == "central":
+            rows_pwr = "interior"
         D_pwr, areas = _build_gradient_block(
             surfaces,
-            rows_mode=spec.gradient_rows_power,
+            rows_mode=rows_pwr,
             emdm_mode=spec.emdm_mode,
             scheme=spec.gradient_scheme_power,
         )

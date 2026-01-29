@@ -68,12 +68,12 @@ def _param_panel(surface_type: str) -> dict:
 
     if surface_type == "disk_polar":
         return {
-            "R_AP": st.number_input("R_AP", min_value=1e-4, value=0.2, format="%.4f"),
-            "NR": int(st.number_input("NR", min_value=2, value=8, step=1)),
-            "NT": int(st.number_input("NT", min_value=3, value=16, step=1)),
+            "R_AP": st.number_input("R_AP", min_value=1e-4, value=0.3000, format="%.4f"),
+            "NR": int(st.number_input("NR", min_value=2, value=32, step=1)),
+            "NT": int(st.number_input("NT", min_value=3, value=48, step=1)),
             "z0": st.number_input("z0", value=0.0, format="%.4f"),
             "use_two_planes": st.checkbox("use_two_planes", value=True),
-            "z_offset": st.number_input("z_offset", value=0.1500, format="%.4f"),
+            "z_offset": st.number_input("z_offset", value=0.1400, format="%.4f"),
             "flip_second_normals": st.checkbox("flip_second_normals", value=False),
         }
     if surface_type == "plane_cart":
@@ -91,9 +91,9 @@ def _param_panel(surface_type: str) -> dict:
         }
     return {
         "R_CYL": st.number_input("R_CYL", min_value=1e-4, value=0.2, format="%.4f"),
-        "H": st.number_input("H", min_value=1e-4, value=0.3, format="%.4f"),
-        "NZ": int(st.number_input("NZ", min_value=1, value=6, step=1)),
-        "NTH": int(st.number_input("NTH", min_value=3, value=12, step=1)),
+        "H": st.number_input("H", min_value=1e-4, value=0.6000, format="%.4f"),
+        "NZ": int(st.number_input("NZ", min_value=1, value=32, step=1)),
+        "NTH": int(st.number_input("NTH", min_value=3, value=48, step=1)),
         "z_center": st.number_input("z_center", value=0.0, format="%.4f"),
         "dirichlet_z_edges": st.checkbox("dirichlet_z_edges", value=True),
     }
@@ -164,10 +164,18 @@ def main() -> None:
             use_pitch = st.checkbox("use_pitch", value=False)
             delta_s = st.number_input("delta_S", min_value=0.0, value=0.0, format="%.4f")
             pitch_min = st.number_input("pitch_min", min_value=0.0, value=0.0, format="%.4f")
-            use_tv = st.checkbox("use_tv", value=False)
-            lambda_tv = st.number_input("lambda_tv", min_value=0.0, value=0.0, format="%.2e")
-            use_power = st.checkbox("use_power", value=False)
-            lambda_pwr = st.number_input("lambda_pwr", min_value=0.0, value=0.0, format="%.2e")
+            use_tv_default = surface_type == "disk_polar"
+            lambda_tv_default = 1.00e-6 if surface_type == "disk_polar" else 0.0
+            use_tv = st.checkbox("use_tv", value=use_tv_default)
+            lambda_tv = st.number_input(
+                "lambda_tv", min_value=0.0, value=lambda_tv_default, format="%.2e"
+            )
+            use_power_default = surface_type in {"cylinder_unwrap", "disk_polar"}
+            lambda_pwr_default = 2.00e-2 if surface_type == "cylinder_unwrap" else 4.00e-2
+            use_power = st.checkbox("use_power", value=use_power_default)
+            lambda_pwr = st.number_input(
+                "lambda_pwr", min_value=0.0, value=lambda_pwr_default, format="%.2e"
+            )
             r_sheet = st.number_input("r_sheet", min_value=0.0, value=0.000492, format="%.6f")
             default_scheme = "central" if surface_type == "plane_cart" else "forward"
             grad_scheme = st.selectbox(

@@ -97,68 +97,32 @@ def build_gradient_operator(
         if surface.periodic_u:
             iu_p = (iu + 1) % Nu
             iu_m = (iu - 1) % Nu
-            k_p = int(surface.idx_map[iu_p, iv])
-            k_m = int(surface.idx_map[iu_m, iv])
-            if k_p >= 0 and k_m >= 0:
-                add_entry(row_u, k_p, 0.5 * inv_u)
-                add_entry(row_u, k_m, -0.5 * inv_u)
-            elif k_p >= 0:
-                add_entry(row_u, k_p, inv_u)
-                if k_cur >= 0:
-                    add_entry(row_u, int(k_cur), -inv_u)
-            elif k_m >= 0:
-                add_entry(row_u, k_m, -inv_u)
-                if k_cur >= 0:
-                    add_entry(row_u, int(k_cur), inv_u)
+            if surface.idx_map[iu_p, iv] >= 0:
+                add_entry(row_u, int(surface.idx_map[iu_p, iv]), 0.5 * inv_u)
+            if surface.idx_map[iu_m, iv] >= 0:
+                add_entry(row_u, int(surface.idx_map[iu_m, iv]), -0.5 * inv_u)
         else:
             iu_p = iu + 1
             iu_m = iu - 1
-            k_p = int(surface.idx_map[iu_p, iv]) if iu_p < Nu else -1
-            k_m = int(surface.idx_map[iu_m, iv]) if iu_m >= 0 else -1
-            if k_p >= 0 and k_m >= 0:
-                add_entry(row_u, k_p, 0.5 * inv_u)
-                add_entry(row_u, k_m, -0.5 * inv_u)
-            elif k_p >= 0:
-                add_entry(row_u, k_p, inv_u)
-                if k_cur >= 0:
-                    add_entry(row_u, int(k_cur), -inv_u)
-            elif k_m >= 0:
-                add_entry(row_u, k_m, -inv_u)
-                if k_cur >= 0:
-                    add_entry(row_u, int(k_cur), inv_u)
+            if iu_p < Nu and surface.idx_map[iu_p, iv] >= 0:
+                add_entry(row_u, int(surface.idx_map[iu_p, iv]), 0.5 * inv_u)
+            if iu_m >= 0 and surface.idx_map[iu_m, iv] >= 0:
+                add_entry(row_u, int(surface.idx_map[iu_m, iv]), -0.5 * inv_u)
 
         if surface.periodic_v:
             iv_p = (iv + 1) % Nv
             iv_m = (iv - 1) % Nv
-            k_p = int(surface.idx_map[iu, iv_p])
-            k_m = int(surface.idx_map[iu, iv_m])
-            if k_p >= 0 and k_m >= 0:
-                add_entry(row_v, k_p, 0.5 * inv_v)
-                add_entry(row_v, k_m, -0.5 * inv_v)
-            elif k_p >= 0:
-                add_entry(row_v, k_p, inv_v)
-                if k_cur >= 0:
-                    add_entry(row_v, int(k_cur), -inv_v)
-            elif k_m >= 0:
-                add_entry(row_v, k_m, -inv_v)
-                if k_cur >= 0:
-                    add_entry(row_v, int(k_cur), inv_v)
+            if surface.idx_map[iu, iv_p] >= 0:
+                add_entry(row_v, int(surface.idx_map[iu, iv_p]), 0.5 * inv_v)
+            if surface.idx_map[iu, iv_m] >= 0:
+                add_entry(row_v, int(surface.idx_map[iu, iv_m]), -0.5 * inv_v)
         else:
             iv_p = iv + 1
             iv_m = iv - 1
-            k_p = int(surface.idx_map[iu, iv_p]) if iv_p < Nv else -1
-            k_m = int(surface.idx_map[iu, iv_m]) if iv_m >= 0 else -1
-            if k_p >= 0 and k_m >= 0:
-                add_entry(row_v, k_p, 0.5 * inv_v)
-                add_entry(row_v, k_m, -0.5 * inv_v)
-            elif k_p >= 0:
-                add_entry(row_v, k_p, inv_v)
-                if k_cur >= 0:
-                    add_entry(row_v, int(k_cur), -inv_v)
-            elif k_m >= 0:
-                add_entry(row_v, k_m, -inv_v)
-                if k_cur >= 0:
-                    add_entry(row_v, int(k_cur), inv_v)
+            if iv_p < Nv and surface.idx_map[iu, iv_p] >= 0:
+                add_entry(row_v, int(surface.idx_map[iu, iv_p]), 0.5 * inv_v)
+            if iv_m >= 0 and surface.idx_map[iu, iv_m] >= 0:
+                add_entry(row_v, int(surface.idx_map[iu, iv_m]), -0.5 * inv_v)
 
     D = coo_matrix((data, (rows_idx, cols_idx)), shape=(2 * nrows, surface.Nint)).tocsr()
     return GradientOperator(D=D, row_coords=row_coords, rows_mode=rows, scheme=scheme)
