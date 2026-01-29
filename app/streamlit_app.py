@@ -315,11 +315,12 @@ def main() -> None:
                         }.items()
                         if enabled
                     ]
-                    st.markdown("### 最適化サイズ")
+                    st.markdown("### 最適化問題サイズ")
                     st.caption(f"有効項目: {', '.join(active_terms) if active_terms else 'なし'}")
-                    st.write(
-                        f"変数数: {size.n_variables} (非負制約付き: {size.n_nonneg}) / "
-                        f"制約数: {size.n_constraints}"
+                    st.markdown(
+                        f"**変数数:** {size.n_variables} "
+                        f"(非負制約付き: {size.n_nonneg}) / "
+                        f"**制約数:** {size.n_constraints}"
                     )
                     st.json({"variables": size.variables, "constraints": size.constraints})
             except Exception as exc:
@@ -449,9 +450,10 @@ def main() -> None:
             ]
 
         for field in fields:
-            fig, ax = plt.subplots(figsize=(5, 4))
-            cs = ax.contourf(field.X, field.Y, field.S, levels=30)
-            ax.contour(field.X, field.Y, field.S, levels=30, colors="k", linewidths=0.6)
+            fig, ax = plt.subplots(figsize=(4, 3), dpi=180)
+            levels = 60
+            cs = ax.contourf(field.X, field.Y, field.S, levels=levels)
+            ax.contour(field.X, field.Y, field.S, levels=levels, colors="k", linewidths=0.6)
             fig.colorbar(cs, ax=ax)
             ax.set_title(field.name)
             ax.set_aspect("equal", adjustable="box")
