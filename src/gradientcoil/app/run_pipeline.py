@@ -170,6 +170,7 @@ def run_optimization_pipeline(
     scheme_pitch = config["spec"].get("gradient_scheme_pitch", base_scheme)
     scheme_tv = config["spec"].get("gradient_scheme_tv", base_scheme)
     scheme_power = config["spec"].get("gradient_scheme_power", base_scheme)
+    scheme_tgv = config["spec"].get("gradient_scheme_tgv", base_scheme)
 
     spec = SocpBzSpec(
         use_tv=config["spec"]["use_tv"],
@@ -179,6 +180,12 @@ def run_optimization_pipeline(
         use_power=config["spec"]["use_power"],
         lambda_pwr=float(config["spec"]["lambda_pwr"]),
         r_sheet=float(config["spec"]["r_sheet"]),
+        use_tgv=config["spec"].get("use_tgv", False),
+        alpha1_tgv=float(config["spec"].get("alpha1_tgv", 1e-6)),
+        alpha0_tgv=float(config["spec"].get("alpha0_tgv", 1e-6)),
+        tgv_area_weights=bool(config["spec"].get("tgv_area_weights", True)),
+        gradient_rows_tgv=str(config["spec"].get("gradient_rows_tgv", "interior")),
+        gradient_scheme_tgv=scheme_tgv,
         gradient_scheme_pitch=scheme_pitch,
         gradient_scheme_tv=scheme_tv,
         gradient_scheme_power=scheme_power,

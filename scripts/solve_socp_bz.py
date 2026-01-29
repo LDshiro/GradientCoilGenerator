@@ -152,6 +152,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--use-power", action="store_true")
     parser.add_argument("--lambda-pwr", type=float, default=0.0)
     parser.add_argument("--r-sheet", type=float, default=0.000492)
+    parser.add_argument("--use-tgv", action="store_true")
+    parser.add_argument("--alpha1-tgv", type=float, default=1e-6)
+    parser.add_argument("--alpha0-tgv", type=float, default=1e-6)
+    tgv_group = parser.add_mutually_exclusive_group()
+    tgv_group.add_argument("--tgv-area-weights", action="store_true", default=True)
+    tgv_group.add_argument("--no-tgv-area-weights", action="store_false", dest="tgv_area_weights")
     parser.add_argument(
         "--grad-scheme",
         choices=["forward", "central", "edge"],
@@ -161,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--grad-scheme-pitch", choices=["forward", "central", "edge"], default=None)
     parser.add_argument("--grad-scheme-tv", choices=["forward", "central", "edge"], default=None)
     parser.add_argument("--grad-scheme-power", choices=["forward", "central", "edge"], default=None)
+    parser.add_argument("--grad-scheme-tgv", choices=["forward", "central", "edge"], default=None)
 
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--max-iter", type=int, default=None)
@@ -209,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
     grad_scheme_pitch = args.grad_scheme_pitch or grad_scheme
     grad_scheme_tv = args.grad_scheme_tv or grad_scheme
     grad_scheme_power = args.grad_scheme_power or grad_scheme
+    grad_scheme_tgv = args.grad_scheme_tgv or grad_scheme
 
     spec = SocpBzSpec(
         use_tv=args.use_tv,
@@ -218,6 +226,11 @@ def main(argv: list[str] | None = None) -> int:
         use_power=args.use_power,
         lambda_pwr=float(args.lambda_pwr),
         r_sheet=float(args.r_sheet),
+        use_tgv=args.use_tgv,
+        alpha1_tgv=float(args.alpha1_tgv),
+        alpha0_tgv=float(args.alpha0_tgv),
+        tgv_area_weights=bool(args.tgv_area_weights),
+        gradient_scheme_tgv=grad_scheme_tgv,
         gradient_scheme_pitch=grad_scheme_pitch,
         gradient_scheme_tv=grad_scheme_tv,
         gradient_scheme_power=grad_scheme_power,
@@ -261,7 +274,12 @@ def main(argv: list[str] | None = None) -> int:
         "use_power": bool(args.use_power),
         "lambda_pwr": float(args.lambda_pwr),
         "r_sheet": float(args.r_sheet),
+        "use_tgv": bool(args.use_tgv),
+        "alpha1_tgv": float(args.alpha1_tgv),
+        "alpha0_tgv": float(args.alpha0_tgv),
+        "tgv_area_weights": bool(args.tgv_area_weights),
         "grad_scheme": args.grad_scheme,
+        "gradient_scheme_tgv": grad_scheme_tgv,
         "gradient_scheme_pitch": grad_scheme_pitch,
         "gradient_scheme_tv": grad_scheme_tv,
         "gradient_scheme_power": grad_scheme_power,

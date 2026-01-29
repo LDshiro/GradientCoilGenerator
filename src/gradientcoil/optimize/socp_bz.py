@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import cvxpy as cp
 import numpy as np
-from scipy.sparse import block_diag
+from scipy.sparse import block_diag, coo_matrix, csr_matrix
 
 from gradientcoil.operators.gradient import (
     build_edge_difference_operator,
@@ -23,6 +23,12 @@ class SocpBzSpec:
     use_power: bool = False
     lambda_pwr: float = 0.0
     r_sheet: float = 1.0
+    use_tgv: bool = False
+    alpha1_tgv: float = 1e-6
+    alpha0_tgv: float = 1e-6
+    tgv_area_weights: bool = True
+    gradient_rows_tgv: str = "interior"
+    gradient_scheme_tgv: str = "forward"
     gradient_scheme_pitch: str = "forward"
     gradient_scheme_tv: str = "forward"
     gradient_scheme_power: str = "forward"
@@ -99,6 +105,51 @@ def _build_edge_block(
     D = block_diag([op.D for op in ops], format="csr")
     areas = np.concatenate([op.edge_areas for op in ops]) if ops else np.zeros((0,), dtype=float)
     return D, areas
+
+
+def _build_edge_ops(
+    surfaces: list[SurfaceGrid],
+    *,
+    rows_mode: str,
+    emdm_mode: str,
+) -> list:
+    if emdm_mode == "shared":
+        return [build_edge_difference_operator(surfaces[0], rows=rows_mode)]
+    return [build_edge_difference_operator(surface, rows=rows_mode) for surface in surfaces]
+
+
+def _build_line_graph_operator(op) -> tuple[csr_matrix, np.ndarray]:
+    cell_edges: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    for idx, (iu, iv) in enumerate(op.uv0):
+        cell_edges.setdefault((int(iu), int(iv)), []).append((idx, 1))
+    for idx, k1 in enumerate(op.k1):
+        if k1 >= 0:
+            iu, iv = op.uv1[idx]
+            cell_edges.setdefault((int(iu), int(iv)), []).append((idx, -1))
+
+    rows_idx: list[int] = []
+    cols_idx: list[int] = []
+    data: list[float] = []
+    edge_area_list: list[float] = []
+
+    for edges in cell_edges.values():
+        n = len(edges)
+        if n < 2:
+            continue
+        for i in range(n):
+            for j in range(i + 1, n):
+                e0, s0 = edges[i]
+                e1, s1 = edges[j]
+                row = len(edge_area_list)
+                rows_idx.extend([row, row])
+                cols_idx.extend([e0, e1])
+                data.extend([-float(s0), float(s1)])
+                edge_area_list.append(0.5 * (op.edge_areas[e0] + op.edge_areas[e1]))
+
+    D_line = coo_matrix(
+        (data, (rows_idx, cols_idx)), shape=(len(edge_area_list), op.D.shape[0])
+    ).tocsr()
+    return D_line, np.asarray(edge_area_list, dtype=float)
 
 
 def solve_socp_bz(
@@ -228,6 +279,116 @@ def solve_socp_bz(
             p = cp.Variable(nonneg=True)
             constraints.append(cp.norm(cp.multiply(Wsqrt, g_pwr), 2) <= p)
             obj_terms.append(spec.lambda_pwr * p)
+
+    if spec.use_tgv:
+        if spec.alpha1_tgv <= 0.0 or spec.alpha0_tgv <= 0.0:
+            raise ValueError("TGV requires alpha1_tgv > 0 and alpha0_tgv > 0.")
+        if spec.gradient_rows_tgv != "interior":
+            raise ValueError("TGV requires gradient_rows_tgv='interior'.")
+        if spec.gradient_scheme_tgv == "edge":
+            ops = _build_edge_ops(
+                surfaces,
+                rows_mode=spec.gradient_rows_tgv,
+                emdm_mode=spec.emdm_mode,
+            )
+            if spec.emdm_mode == "shared":
+                op0 = ops[0]
+                D_edge = op0.D
+                areas_edge = op0.edge_areas
+                D_line, areas_line = _build_line_graph_operator(op0)
+            else:
+                D_edge = block_diag([op.D for op in ops], format="csr")
+                areas_edge = (
+                    np.concatenate([op.edge_areas for op in ops])
+                    if ops
+                    else np.zeros((0,), dtype=float)
+                )
+                line_blocks: list[csr_matrix] = []
+                area_blocks: list[np.ndarray] = []
+                for op in ops:
+                    D_line_i, areas_line_i = _build_line_graph_operator(op)
+                    line_blocks.append(D_line_i)
+                    area_blocks.append(areas_line_i)
+                if line_blocks:
+                    D_line = block_diag(line_blocks, format="csr")
+                else:
+                    D_line = csr_matrix((0, D_edge.shape[0]))
+                areas_line = (
+                    np.concatenate(area_blocks) if area_blocks else np.zeros((0,), dtype=float)
+                )
+
+            g = D_edge @ s
+            w = cp.Variable(D_edge.shape[0])
+            u1 = cp.Variable(D_edge.shape[0], nonneg=True)
+            constraints.append(g - w <= u1)
+            constraints.append(-(g - w) <= u1)
+
+            n_line = int(D_line.shape[0])
+            u0 = None
+            if n_line > 0:
+                u0 = cp.Variable(n_line, nonneg=True)
+                g_line = D_line @ w
+                constraints.append(g_line <= u0)
+                constraints.append(-g_line <= u0)
+
+            if spec.tgv_area_weights:
+                term1 = spec.alpha1_tgv * cp.sum(cp.multiply(areas_edge, u1))
+                if n_line > 0 and u0 is not None:
+                    term0 = spec.alpha0_tgv * cp.sum(cp.multiply(areas_line, u0))
+                else:
+                    term0 = 0.0
+            else:
+                term1 = spec.alpha1_tgv * cp.sum(u1)
+                term0 = spec.alpha0_tgv * cp.sum(u0) if n_line > 0 and u0 is not None else 0.0
+            obj_terms.append(term1 + term0)
+        else:
+            if spec.gradient_scheme_tgv not in {"forward", "central"}:
+                raise ValueError("gradient_scheme_tgv must be 'forward', 'central', or 'edge'.")
+            D_tgv, areas_tgv = _build_gradient_block(
+                surfaces,
+                rows_mode=spec.gradient_rows_tgv,
+                emdm_mode=spec.emdm_mode,
+                scheme=spec.gradient_scheme_tgv,
+            )
+            nrows = D_tgv.shape[0] // 2
+            if D_tgv.shape[0] != 2 * nrows or D_tgv.shape[1] != n_unknown:
+                raise ValueError("TGV gradient operator shape mismatch.")
+            if nrows != n_unknown:
+                raise ValueError("TGV requires rows_mode='interior' so that nrows == n_unknown.")
+
+            g = D_tgv @ s
+            w = cp.Variable(2 * nrows)
+            u1 = cp.Variable(nrows, nonneg=True)
+            u0 = cp.Variable(nrows, nonneg=True)
+
+            for k in range(nrows):
+                constraints.append(
+                    cp.norm(cp.hstack([g[2 * k] - w[2 * k], g[2 * k + 1] - w[2 * k + 1]]), 2)
+                    <= u1[k]
+                )
+
+            w_u = w[0::2]
+            w_v = w[1::2]
+            Dw_u = D_tgv @ w_u
+            Dw_v = D_tgv @ w_v
+            sqrt2 = float(np.sqrt(2.0))
+            for k in range(nrows):
+                du_wu = Dw_u[2 * k]
+                dv_wu = Dw_u[2 * k + 1]
+                du_wv = Dw_v[2 * k]
+                dv_wv = Dw_v[2 * k + 1]
+                e11 = du_wu
+                e22 = dv_wv
+                e12 = 0.5 * (dv_wu + du_wv)
+                constraints.append(cp.norm(cp.hstack([e11, e22, sqrt2 * e12]), 2) <= u0[k])
+
+            if spec.tgv_area_weights:
+                tgv_term = spec.alpha1_tgv * cp.sum(
+                    cp.multiply(areas_tgv, u1)
+                ) + spec.alpha0_tgv * cp.sum(cp.multiply(areas_tgv, u0))
+            else:
+                tgv_term = spec.alpha1_tgv * cp.sum(u1) + spec.alpha0_tgv * cp.sum(u0)
+            obj_terms.append(tgv_term)
 
     objective = cp.Minimize(cp.sum(cp.hstack(obj_terms)))
     problem = cp.Problem(objective, constraints)

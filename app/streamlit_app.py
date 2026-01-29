@@ -176,6 +176,10 @@ def main() -> None:
             lambda_pwr = st.number_input(
                 "lambda_pwr", min_value=0.0, value=lambda_pwr_default, format="%.2e"
             )
+            use_tgv = st.checkbox("use_tgv", value=False)
+            alpha1_tgv = st.number_input("alpha1_tgv", min_value=0.0, value=1.0e-6, format="%.3e")
+            alpha0_tgv = st.number_input("alpha0_tgv", min_value=0.0, value=1.0e-6, format="%.3e")
+            tgv_area_weights = st.checkbox("tgv_area_weights", value=True)
             r_sheet = st.number_input("r_sheet", min_value=0.0, value=0.000492, format="%.6f")
             default_scheme = "central" if surface_type == "plane_cart" else "forward"
             grad_scheme = st.selectbox(
@@ -214,8 +218,13 @@ def main() -> None:
                 "lambda_tv": lambda_tv,
                 "use_power": use_power,
                 "lambda_pwr": lambda_pwr,
+                "use_tgv": use_tgv,
+                "alpha1_tgv": alpha1_tgv,
+                "alpha0_tgv": alpha0_tgv,
+                "tgv_area_weights": tgv_area_weights,
                 "r_sheet": r_sheet,
                 "gradient_scheme": grad_scheme,
+                "gradient_scheme_tgv": grad_scheme,
                 "emdm_mode": emdm_mode,
                 "max_iter": max_iter,
                 "solver_verbose": solver_verbose,
@@ -283,6 +292,9 @@ def main() -> None:
 
             gap = 2.0 * float(params.get("z_offset", 0.0)) if params.get("use_two_planes") else 0.0
             J_max = float(delta_s / pitch_min) if (use_pitch and pitch_min > 0.0) else 0.0
+            if use_tgv and (alpha1_tgv <= 0.0 or alpha0_tgv <= 0.0):
+                st.error("TGV requires alpha1_tgv > 0 and alpha0_tgv > 0.")
+                return
             config = {
                 "out_dir": str(ROOT / "runs"),
                 "surface_type": surface_type,
@@ -312,8 +324,13 @@ def main() -> None:
                     "J_max": float(J_max),
                     "use_power": bool(use_power),
                     "lambda_pwr": float(lambda_pwr),
+                    "use_tgv": bool(use_tgv),
+                    "alpha1_tgv": float(alpha1_tgv),
+                    "alpha0_tgv": float(alpha0_tgv),
+                    "tgv_area_weights": bool(tgv_area_weights),
                     "r_sheet": float(r_sheet),
                     "grad_scheme": grad_scheme,
+                    "gradient_scheme_tgv": grad_scheme,
                     "gradient_scheme_pitch": grad_scheme,
                     "gradient_scheme_tv": grad_scheme,
                     "gradient_scheme_power": grad_scheme,
