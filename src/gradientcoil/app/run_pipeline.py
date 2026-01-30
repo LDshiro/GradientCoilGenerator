@@ -21,7 +21,7 @@ from gradientcoil.surfaces.cylinder_unwrap import (
 )
 from gradientcoil.surfaces.disk_polar import DiskPolarSurfaceConfig, build_disk_polar_surface
 from gradientcoil.surfaces.plane_cart import PlaneCartSurfaceConfig, build_plane_cart_surface
-from gradientcoil.targets.bz_shim import BzShimTargetSpec, standard_shim_terms
+from gradientcoil.targets.target_bz_source import ShimBasisTargetBz, target_source_from_dict
 
 
 def _progress(progress_cb: Callable[[str, str], None] | None, stage: str, info: str) -> None:
@@ -154,15 +154,19 @@ def run_optimization_pipeline(
 
     _progress(progress_cb, "target", "building Bz target")
     tgt_cfg = config["target"]
-    L_ref = roi_cfg["roi_radius"] if tgt_cfg["L_ref"] == "auto" else float(tgt_cfg["L_ref"])
-    terms = list(standard_shim_terms(max_order=tgt_cfg["shim_max_order"]).keys())
-    target_spec = BzShimTargetSpec(
-        coeffs=tgt_cfg["coeffs"],
-        terms=terms,
-        scale_policy=tgt_cfg["scale_policy"],
-        L_ref=float(L_ref),
-    )
-    bz_target = target_spec.evaluate(roi_points)
+    source_kind = tgt_cfg.get("source_kind", "basis")
+    if source_kind == "basis":
+        L_ref_val = roi_cfg["roi_radius"] if tgt_cfg["L_ref"] == "auto" else float(tgt_cfg["L_ref"])
+        target_source = ShimBasisTargetBz(
+            max_order=int(tgt_cfg["max_order"]),
+            coeffs=dict(tgt_cfg["coeffs"]),
+            L_ref=float(L_ref_val),
+            scale_policy=str(tgt_cfg["scale_policy"]),
+        )
+    else:
+        target_source = target_source_from_dict(tgt_cfg)
+    bz_target = target_source.evaluate(roi_points)
+    config["target_resolved"] = target_source.to_dict()
 
     _progress(progress_cb, "solve", "running SOCP solver")
     default_scheme = "central" if config["surface_type"] == "plane_cart" else "forward"

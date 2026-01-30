@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from gradientcoil.optimize.socp_bz import SocpBzResult
-from gradientcoil.targets.bz_shim import BzShimTargetSpec
+from gradientcoil.targets.target_bz_source import TargetBzSource
 
 
 def _json_array(text: str) -> np.ndarray:
@@ -26,7 +26,7 @@ def save_socp_bz_npz(
     roi_weights: np.ndarray,
     bz_target: np.ndarray,
     config: dict,
-    target_spec: BzShimTargetSpec | None = None,
+    target_source: TargetBzSource | None = None,
 ) -> Path:
     save_path = Path(path)
     config_json = _json_array(json.dumps(config, ensure_ascii=False))
@@ -52,21 +52,27 @@ def save_socp_bz_npz(
         data["X_plot"] = np.asarray(surfaces[0].X_plot, dtype=float)
         data["Y_plot"] = np.asarray(surfaces[0].Y_plot, dtype=float)
 
-    if target_spec is not None:
-        coeffs = target_spec.coeffs
-        coeffs_json = _json_array(json.dumps(coeffs, ensure_ascii=False))
-        coeff_names = np.asarray(list(coeffs.keys()), dtype="<U32")
-        coeff_values = np.asarray(list(coeffs.values()), dtype=float)
-        data.update(
-            {
-                "coeffs_json": coeffs_json,
-                "coeff_names": coeff_names,
-                "coeff_values": coeff_values,
-                "L_ref": np.asarray(float(target_spec.L_ref), dtype=float),
-                "scale_policy": _json_array(str(target_spec.scale_policy)),
-                "terms": np.asarray(list(target_spec.terms), dtype="<U32"),
-            }
-        )
+    if target_source is not None:
+        target_json = _json_array(json.dumps(target_source.to_dict(), ensure_ascii=False))
+        data["target_json"] = target_json
+        if hasattr(target_source, "coeffs"):
+            coeffs = dict(target_source.coeffs)
+            coeffs_json = _json_array(json.dumps(coeffs, ensure_ascii=False))
+            coeff_names = np.asarray(list(coeffs.keys()), dtype="<U32")
+            coeff_values = np.asarray(list(coeffs.values()), dtype=float)
+            data.update(
+                {
+                    "coeffs_json": coeffs_json,
+                    "coeff_names": coeff_names,
+                    "coeff_values": coeff_values,
+                }
+            )
+        if hasattr(target_source, "L_ref"):
+            data["L_ref"] = np.asarray(float(target_source.L_ref), dtype=float)
+        if hasattr(target_source, "scale_policy"):
+            data["scale_policy"] = _json_array(str(target_source.scale_policy))
+        if hasattr(target_source, "max_order"):
+            data["max_order"] = np.asarray(int(target_source.max_order), dtype=int)
 
     np.savez(save_path, **data)
     return save_path

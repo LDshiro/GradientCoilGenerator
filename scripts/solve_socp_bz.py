@@ -20,7 +20,10 @@ from gradientcoil.surfaces.cylinder_unwrap import (
 )
 from gradientcoil.surfaces.disk_polar import DiskPolarSurfaceConfig, build_disk_polar_surface
 from gradientcoil.surfaces.plane_cart import PlaneCartSurfaceConfig, build_plane_cart_surface
-from gradientcoil.targets.bz_shim import BzShimTargetSpec, standard_shim_terms
+from gradientcoil.targets.target_bz_source import (
+    MeasuredTargetBz,
+    ShimBasisTargetBz,
+)
 
 
 def _parse_coeff_list(items: list[str]) -> dict[str, float]:
@@ -137,10 +140,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--roi-dedup", action="store_true")
     parser.add_argument("--roi-dedup-eps", type=float, default=1e-12)
 
-    parser.add_argument("--shim-max-order", type=int, default=2)
+    parser.add_argument("--shim-max-order", type=int, default=1)
     parser.add_argument("--coeff", action="append", default=[])
     parser.add_argument("--scale-policy", default="T_per_m")
     parser.add_argument("--L-ref", default="auto")
+    parser.add_argument("--target-source", choices=["basis", "measured"], default="basis")
+    parser.add_argument("--measured-path", default=None)
 
     parser.add_argument("--emdm-mode", choices=["shared", "concat"], default="shared")
     parser.add_argument("--use-pitch", action="store_true")
@@ -198,16 +203,19 @@ def main(argv: list[str] | None = None) -> int:
         roi_weights = np.ones((roi_points.shape[0],), dtype=float)
 
     L_ref = args.roi_radius if args.L_ref == "auto" else float(args.L_ref)
-    terms_map = standard_shim_terms(max_order=args.shim_max_order)
-    terms = list(terms_map.keys())
     coeffs = _parse_coeff_list(args.coeff)
-    target_spec = BzShimTargetSpec(
-        coeffs=coeffs,
-        terms=terms,
-        scale_policy=args.scale_policy,
-        L_ref=float(L_ref),
-    )
-    bz_target = target_spec.evaluate(roi_points)
+    if args.target_source == "basis":
+        target_source = ShimBasisTargetBz(
+            max_order=int(args.shim_max_order),
+            coeffs=coeffs,
+            L_ref=float(L_ref),
+            scale_policy=args.scale_policy,
+        )
+    else:
+        if args.measured_path is None:
+            raise ValueError("--measured-path is required for measured target.")
+        target_source = MeasuredTargetBz(path=str(args.measured_path))
+    bz_target = target_source.evaluate(roi_points)
 
     if args.J_max is not None:
         J_max = float(args.J_max)
@@ -274,9 +282,12 @@ def main(argv: list[str] | None = None) -> int:
         "roi_sampler": args.roi_sampler,
         "roi_dedup": bool(args.roi_dedup),
         "roi_dedup_eps": float(args.roi_dedup_eps),
+        "source_kind": args.target_source,
         "coeffs": coeffs,
+        "max_order": int(args.shim_max_order),
         "scale_policy": args.scale_policy,
-        "L_ref": float(L_ref),
+        "L_ref": float(L_ref) if args.L_ref != "auto" else "auto",
+        "measured_path": args.measured_path,
         "emdm_mode": args.emdm_mode,
         "use_pitch": bool(args.use_pitch),
         "J_max": float(J_max),
@@ -312,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
         roi_weights=roi_weights,
         bz_target=bz_target,
         config=config,
-        target_spec=target_spec,
+        target_source=target_source,
     )
 
     print(f"Saved: {out_path}")

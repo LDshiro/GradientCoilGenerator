@@ -101,6 +101,7 @@ def _param_panel(surface_type: str) -> dict:
 
 def main() -> None:
     import numpy as np
+    import pandas as pd
     import streamlit as st
 
     from gradientcoil.app.run_pipeline import run_optimization_pipeline
@@ -113,8 +114,19 @@ def main() -> None:
         sample_sphere_sym_hammersley,
         symmetrize_points,
     )
+    from gradientcoil.postprocess.contours_resample import (
+        ContourFilterConfig,
+        ContourLevelConfig,
+        PlotConfig,
+        PostprocessConfig,
+        ResampleConfig,
+        TriangulationConfig,
+        process_run,
+        save_resampled_npz,
+    )
     from gradientcoil.runs.listing import list_runs, load_run_config, load_run_npz, load_run_solver
-    from gradientcoil.targets.bz_shim import BzShimTargetSpec, standard_shim_terms
+    from gradientcoil.targets.shim_basis import list_shim_terms
+    from gradientcoil.targets.target_bz_source import ShimBasisTargetBz
     from gradientcoil.viz.mesh import periodic_theta_extend
     from gradientcoil.viz.plotly_setup import make_problem_setup_figure_plotly
 
@@ -160,10 +172,72 @@ def main() -> None:
             )
 
             st.markdown("### Target")
-            shim_max_order = int(st.number_input("shim_max_order", min_value=0, value=1, step=1))
-            coeff_text = st.text_input("coeffs (NAME=VALUE, comma separated)", value="Y=0.02")
-            scale_policy = st.selectbox("scale_policy", ["T_per_m", "native"], index=0)
-            L_ref = st.text_input("L_ref", value="auto")
+            target_source = st.radio(
+                "target_source",
+                ["basis", "measured"],
+                format_func={
+                    "basis": "Shim basis (NMR)",
+                    "measured": "Measured (CSV/NPZ) [future]",
+                }.get,
+                horizontal=True,
+            )
+            target_display = st.radio(
+                "target_display",
+                ["plane", "sphere"],
+                format_func={
+                    "plane": "Plane contour (Z=0)",
+                    "sphere": "Sphere surface (ROI)",
+                }.get,
+                horizontal=True,
+            )
+            max_order = int(st.slider("max_order", min_value=0, max_value=3, value=1, step=1))
+            L_ref_auto = st.checkbox("L_ref auto", value=True)
+            if L_ref_auto:
+                L_ref = "auto"
+                st.number_input(
+                    "L_ref (auto)", min_value=0.0, value=0.0, format="%.4f", disabled=True
+                )
+            else:
+                L_ref = st.number_input("L_ref", min_value=0.0, value=roi_radius, format="%.4f")
+            scale_policy = st.selectbox("scale_policy", ["T_per_m"], index=0)
+            coeffs: dict[str, float] = {}
+            measured_path = ""
+            if target_source == "basis":
+                terms = list_shim_terms(max_order)
+                base_coeffs = st.session_state.get("coeff_map", {})
+                rows = [
+                    {
+                        "name": term.name,
+                        "order": term.order,
+                        "coeff": base_coeffs.get(term.name, 0.0),
+                    }
+                    for term in terms
+                ]
+                editor_key = f"coeff_editor_{max_order}"
+                data_key = f"{editor_key}_data"
+                if data_key not in st.session_state:
+                    st.session_state[data_key] = pd.DataFrame(rows)
+                if st.button("Preset: Y-gradient"):
+                    df = st.session_state[data_key].copy()
+                    df["coeff"] = 0.0
+                    if "Y" in df["name"].values:
+                        df.loc[df["name"] == "Y", "coeff"] = 0.02
+                    st.session_state[data_key] = df
+                coeff_df = st.data_editor(
+                    st.session_state[data_key],
+                    key=editor_key,
+                    disabled=["name", "order"],
+                    use_container_width=True,
+                )
+                st.caption("order 列は読み取り専用です。次数は上の max_order で変更してください。")
+                st.session_state[data_key] = coeff_df
+                coeffs = {
+                    row["name"]: float(row["coeff"]) for row in coeff_df.to_dict(orient="records")
+                }
+                st.session_state["coeff_map"] = coeffs
+            else:
+                measured_path = st.text_input("measured_path", value="")
+                st.warning("Measured target is not implemented yet.")
 
             st.markdown("### Regularizers")
             use_pitch = st.checkbox("use_pitch", value=False)
@@ -222,10 +296,13 @@ def main() -> None:
                 "roi_sampler": roi_sampler,
                 "roi_dedup": roi_dedup,
                 "roi_dedup_eps": roi_dedup_eps,
-                "shim_max_order": shim_max_order,
-                "coeffs": coeff_text,
+                "target_source": target_source,
+                "target_display": target_display,
+                "max_order": max_order,
+                "coeffs": coeffs,
                 "scale_policy": scale_policy,
                 "L_ref": L_ref,
+                "measured_path": measured_path,
                 "use_pitch": use_pitch,
                 "delta_S": delta_s,
                 "pitch_min": pitch_min,
@@ -292,44 +369,51 @@ def main() -> None:
                 )
                 fig.update_layout(height=700)
 
-                if roi_radius > 0:
-                    coeffs: dict[str, float] = {}
-                    if coeff_text.strip():
-                        for item in coeff_text.split(","):
-                            if not item.strip():
-                                continue
-                            if "=" in item:
-                                name, val = item.split("=", 1)
-                                coeffs[name.strip()] = float(val)
-                    terms = list(standard_shim_terms(max_order=shim_max_order).keys())
+                if roi_radius > 0 and target_source == "basis":
                     L_ref_val = roi_radius if L_ref == "auto" else float(L_ref)
-                    target_spec = BzShimTargetSpec(
+                    target_spec = ShimBasisTargetBz(
+                        max_order=max_order,
                         coeffs=coeffs,
-                        terms=terms,
-                        scale_policy=scale_policy,
                         L_ref=float(L_ref_val),
+                        scale_policy=scale_policy,
                     )
                     grid_n = 60
-                    x = np.linspace(-roi_radius, roi_radius, grid_n)
-                    y = np.linspace(-roi_radius, roi_radius, grid_n)
-                    Xg, Yg = np.meshgrid(x, y, indexing="xy")
-                    mask = (Xg**2 + Yg**2) <= (roi_radius**2)
-                    Zg = np.full_like(Xg, np.nan, dtype=float)
-                    if np.any(mask):
-                        pts = np.stack([Xg[mask], Yg[mask], np.zeros_like(Xg[mask])], axis=1)
-                        Zg[mask] = target_spec.evaluate(pts)
+                    if target_display == "plane":
+                        x = np.linspace(-roi_radius, roi_radius, grid_n)
+                        y = np.linspace(-roi_radius, roi_radius, grid_n)
+                        Xg, Yg = np.meshgrid(x, y, indexing="xy")
+                        mask = (Xg**2 + Yg**2) <= (roi_radius**2)
+                        Zg = np.full_like(Xg, np.nan, dtype=float)
+                        if np.any(mask):
+                            pts = np.stack([Xg[mask], Yg[mask], np.zeros_like(Xg[mask])], axis=1)
+                            Zg[mask] = target_spec.evaluate(pts)
+                    else:
+                        theta = np.linspace(0.0, np.pi, grid_n)
+                        phi = np.linspace(0.0, 2.0 * np.pi, grid_n + 1)
+                        Phi, Theta = np.meshgrid(phi, theta, indexing="xy")
+                        Xg = roi_radius * np.sin(Theta) * np.cos(Phi)
+                        Yg = roi_radius * np.sin(Theta) * np.sin(Phi)
+                        Zg = roi_radius * np.cos(Theta)
+                        pts = np.stack([Xg.ravel(), Yg.ravel(), Zg.ravel()], axis=1)
+                        vals = target_spec.evaluate(pts).reshape(Xg.shape)
                     import plotly.graph_objects as go
 
+                    contours = {"z": {"show": True, "color": "black", "width": 1}}
+                    opacity = 0.7
+                    if target_display == "sphere":
+                        contours = None
+                        opacity = 1.0
                     fig.add_trace(
                         go.Surface(
                             x=Xg,
                             y=Yg,
                             z=Zg,
-                            opacity=0.7,
+                            surfacecolor=Zg if target_display == "plane" else vals,
+                            opacity=opacity,
                             colorscale="Viridis",
                             showscale=False,
                             name="target_bz",
-                            contours={"z": {"show": True, "color": "black", "width": 1}},
+                            contours=contours,
                         )
                     )
                 st.plotly_chart(fig, use_container_width=True)
@@ -397,14 +481,9 @@ def main() -> None:
             def _progress(stage: str, info: str) -> None:
                 status_box.info(f"{stage}: {info}")
 
-            coeffs: dict[str, float] = {}
-            if coeff_text.strip():
-                for item in coeff_text.split(","):
-                    if not item.strip():
-                        continue
-                    if "=" in item:
-                        name, val = item.split("=", 1)
-                        coeffs[name.strip()] = float(val)
+            if target_source == "measured":
+                st.error("Measured target is not implemented yet.")
+                return
 
             gap = 2.0 * float(params.get("z_offset", 0.0)) if params.get("use_two_planes") else 0.0
             J_max = float(delta_s / pitch_min) if (use_pitch and pitch_min > 0.0) else 0.0
@@ -428,10 +507,12 @@ def main() -> None:
                     "roi_dedup_eps": float(roi_dedup_eps),
                 },
                 "target": {
-                    "shim_max_order": int(shim_max_order),
+                    "source_kind": target_source,
+                    "max_order": int(max_order),
                     "coeffs": coeffs,
                     "scale_policy": scale_policy,
                     "L_ref": L_ref,
+                    "measured_path": measured_path,
                 },
                 "spec": {
                     "use_tv": bool(use_tv),
@@ -486,6 +567,7 @@ def main() -> None:
 
         selected = st.selectbox("Run", labels, index=default_index)
         entry = entries[labels.index(selected)]
+        run_npz_path = entry.path / "run.npz" if entry.kind == "folder" else entry.path
 
         config = load_run_config(entry)
         solver = load_run_solver(entry)
@@ -505,6 +587,82 @@ def main() -> None:
             st.warning("可視化できるデータが見つかりません。")
             return
 
+        st.subheader("PostProcess")
+        with st.expander("PostProcess settings", expanded=False):
+            st.caption(f"run_npz: {run_npz_path}")
+            pp_config_json = st.text_input("config_json (optional)", value="")
+            pp_col1, pp_col2 = st.columns(2)
+            with pp_col1:
+                pp_level_mode = st.selectbox("level_mode", ["n_levels", "delta_s"], index=0)
+                pp_n_levels = int(st.number_input("n_levels_total", min_value=2, value=26, step=2))
+                pp_delta_s = st.number_input("delta_s", min_value=0.0, value=1.0, format="%.4f")
+                pp_ds_segment = st.number_input(
+                    "ds_segment", min_value=0.0, value=0.005, format="%.4f"
+                )
+                pp_extraction = st.selectbox("extraction_method", ["auto", "grid", "tri"], index=0)
+            with pp_col2:
+                pp_min_vertices = int(
+                    st.number_input("min_vertices", min_value=3, value=12, step=1)
+                )
+                pp_area_eps = st.number_input("area_eps", min_value=0.0, value=1e-6, format="%.2e")
+                pp_close_tol = st.number_input(
+                    "close_tol", min_value=0.0, value=1e-10, format="%.2e"
+                )
+                pp_tri_refine = st.checkbox("tri_refine", value=True)
+                pp_flat_ratio = st.number_input(
+                    "flat_ratio", min_value=0.0, value=0.02, format="%.3f"
+                )
+                pp_subdiv = int(st.number_input("subdiv", min_value=0, value=2, step=1))
+            pp_show_filled = st.checkbox("show_filled (debug)", value=False)
+            pp_show_level_lines = st.checkbox("show_level_lines (debug)", value=False)
+            pp_show_loops = st.checkbox("show_extracted_loops (debug)", value=False)
+            default_out = runs_dir / f"contours_resampled_{entry.label}.npz"
+            pp_out_npz = st.text_input("out_npz", value=str(default_out))
+
+        postprocess_key = f"postprocess_result_{entry.label}"
+        if st.button("PostProcess"):
+            post_cfg = PostprocessConfig(
+                levels=ContourLevelConfig(
+                    mode=pp_level_mode,
+                    n_levels_total=pp_n_levels,
+                    delta_s=pp_delta_s,
+                ),
+                filters=ContourFilterConfig(
+                    min_vertices=pp_min_vertices,
+                    area_eps=pp_area_eps,
+                    close_tol=pp_close_tol,
+                ),
+                triangulation=TriangulationConfig(
+                    use_refine=pp_tri_refine,
+                    flat_ratio=pp_flat_ratio,
+                    subdiv=pp_subdiv,
+                ),
+                plots=PlotConfig(
+                    show_filled=pp_show_filled,
+                    show_level_lines=pp_show_level_lines,
+                    show_extracted_loops=pp_show_loops,
+                ),
+                resample=ResampleConfig(ds_segment=pp_ds_segment),
+                extraction_method=pp_extraction,
+            )
+            try:
+                config_json_path = pp_config_json.strip() or None
+                result, run_cfg = process_run(run_npz_path, config_json_path, post_cfg)
+                save_resampled_npz(
+                    pp_out_npz,
+                    result=result,
+                    run_cfg=run_cfg,
+                    run_npz_path=run_npz_path,
+                    cfg=post_cfg,
+                )
+                st.session_state[postprocess_key] = result
+                st.success(f"PostProcess 完了: {pp_out_npz}")
+                st.caption(
+                    f"loops={len(result.loops_resampled)} segments={result.segments['P'].shape[0]}"
+                )
+            except Exception as exc:
+                st.error(f"PostProcess 失敗: {exc}")
+
         import io
 
         import matplotlib.pyplot as plt
@@ -521,19 +679,65 @@ def main() -> None:
                 _extend_field(field) if field.name == "S_polar" else field for field in fields
             ]
 
+        post_result = st.session_state.get(postprocess_key)
+
+        def _surface_index_from_name(name: str) -> int | None:
+            if name == "S_grid":
+                return 0
+            if name.startswith("S_grid_"):
+                try:
+                    return int(name.split("_")[-1])
+                except ValueError:
+                    return None
+            return None
+
         for field in fields:
-            fig, ax = plt.subplots(figsize=(6, 4), dpi=360)
-            levels = 60
-            cs = ax.contourf(field.X, field.Y, field.S, levels=levels)
-            ax.contour(field.X, field.Y, field.S, levels=levels, colors="k", linewidths=0.6)
-            fig.colorbar(cs, ax=ax)
-            ax.set_title(field.name)
-            ax.set_aspect("equal", adjustable="box")
-            buf = io.BytesIO()
-            fig.savefig(buf, format="png", dpi=360, bbox_inches="tight")
-            buf.seek(0)
-            st.image(buf, width=1000)
-            plt.close(fig)
+            idx = _surface_index_from_name(field.name)
+            col_left, col_right = st.columns(2)
+            with col_left:
+                fig, ax = plt.subplots(figsize=(6, 4), dpi=360)
+                levels = 60
+                cs = ax.contourf(field.X, field.Y, field.S, levels=levels)
+                ax.contour(field.X, field.Y, field.S, levels=levels, colors="k", linewidths=0.6)
+                fig.colorbar(cs, ax=ax)
+                ax.set_title(field.name)
+                ax.set_aspect("equal", adjustable="box")
+                buf = io.BytesIO()
+                fig.savefig(buf, format="png", dpi=360, bbox_inches="tight")
+                buf.seek(0)
+                st.image(buf, width=1000)
+                plt.close(fig)
+
+            with col_right:
+                if post_result is None or idx is None:
+                    st.info("PostProcess 未実行、または対象外フィールドです。")
+                    continue
+                loops = [loop for loop in post_result.loops_resampled if loop.get("surface") == idx]
+                fig, ax = plt.subplots(figsize=(4, 4), dpi=360)
+                for loop in loops:
+                    pts = np.asarray(loop["points"], float)
+                    if pts.size == 0:
+                        continue
+                    ax.plot(pts[:, 0], pts[:, 1], color="black", lw=0.7)
+                ax.set_title(f"PostProcess (surface {idx})")
+                ax.set_aspect("equal", adjustable="box")
+                ax.set_box_aspect(1)
+                ax.set_xlabel("x [m]")
+                ax.set_ylabel("y [m]")
+                ax.grid(True, alpha=0.3)
+                if loops:
+                    all_pts = np.vstack([np.asarray(loop["points"], float) for loop in loops])
+                    xmin, ymin = np.min(all_pts, axis=0)
+                    xmax, ymax = np.max(all_pts, axis=0)
+                    pad_x = 0.05 * max(1e-9, xmax - xmin)
+                    pad_y = 0.05 * max(1e-9, ymax - ymin)
+                    ax.set_xlim(xmin - pad_x, xmax + pad_x)
+                    ax.set_ylim(ymin - pad_y, ymax + pad_y)
+                buf = io.BytesIO()
+                fig.savefig(buf, format="png", dpi=360, bbox_inches="tight")
+                buf.seek(0)
+                st.image(buf, width=1000)
+                plt.close(fig)
 
 
 if __name__ == "__main__":
