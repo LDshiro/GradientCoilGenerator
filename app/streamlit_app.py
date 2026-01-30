@@ -100,6 +100,7 @@ def _param_panel(surface_type: str) -> dict:
 
 
 def main() -> None:
+    import numpy as np
     import streamlit as st
 
     from gradientcoil.app.run_pipeline import run_optimization_pipeline
@@ -113,6 +114,7 @@ def main() -> None:
         symmetrize_points,
     )
     from gradientcoil.runs.listing import list_runs, load_run_config, load_run_npz, load_run_solver
+    from gradientcoil.targets.bz_shim import BzShimTargetSpec, standard_shim_terms
     from gradientcoil.viz.mesh import periodic_theta_extend
     from gradientcoil.viz.plotly_setup import make_problem_setup_figure_plotly
 
@@ -289,6 +291,47 @@ def main() -> None:
                     normal_scale=normal_scale,
                 )
                 fig.update_layout(height=700)
+
+                if roi_radius > 0:
+                    coeffs: dict[str, float] = {}
+                    if coeff_text.strip():
+                        for item in coeff_text.split(","):
+                            if not item.strip():
+                                continue
+                            if "=" in item:
+                                name, val = item.split("=", 1)
+                                coeffs[name.strip()] = float(val)
+                    terms = list(standard_shim_terms(max_order=shim_max_order).keys())
+                    L_ref_val = roi_radius if L_ref == "auto" else float(L_ref)
+                    target_spec = BzShimTargetSpec(
+                        coeffs=coeffs,
+                        terms=terms,
+                        scale_policy=scale_policy,
+                        L_ref=float(L_ref_val),
+                    )
+                    grid_n = 60
+                    x = np.linspace(-roi_radius, roi_radius, grid_n)
+                    y = np.linspace(-roi_radius, roi_radius, grid_n)
+                    Xg, Yg = np.meshgrid(x, y, indexing="xy")
+                    mask = (Xg**2 + Yg**2) <= (roi_radius**2)
+                    Zg = np.full_like(Xg, np.nan, dtype=float)
+                    if np.any(mask):
+                        pts = np.stack([Xg[mask], Yg[mask], np.zeros_like(Xg[mask])], axis=1)
+                        Zg[mask] = target_spec.evaluate(pts)
+                    import plotly.graph_objects as go
+
+                    fig.add_trace(
+                        go.Surface(
+                            x=Xg,
+                            y=Yg,
+                            z=Zg,
+                            opacity=0.7,
+                            colorscale="Viridis",
+                            showscale=False,
+                            name="target_bz",
+                            contours={"z": {"show": True, "color": "black", "width": 1}},
+                        )
+                    )
                 st.plotly_chart(fig, use_container_width=True)
 
                 if roi_points is not None:
