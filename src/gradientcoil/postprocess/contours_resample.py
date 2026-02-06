@@ -392,7 +392,11 @@ def resample_polyline_uniform(
     seg_end = pts[idx + 1, :]
     seg_len = sacc[idx + 1] - sacc[idx]
     alpha = (s_vals - sacc[idx]) / np.maximum(seg_len, eps)
-    return (1.0 - alpha)[:, None] * seg_start + alpha[:, None] * seg_end
+    resampled = (1.0 - alpha)[:, None] * seg_start + alpha[:, None] * seg_end
+    if closed and resampled.shape[0] > 0:
+        if np.linalg.norm(resampled[0] - resampled[-1]) > eps:
+            resampled = np.vstack([resampled, resampled[0]])
+    return resampled
 
 
 def resample_groups_to_segments(
@@ -414,9 +418,13 @@ def resample_groups_to_segments(
             pts = resample_polyline_uniform(loop, ds, closed=True)
             loops_out.append({"surface": surface_index, "level": level, "sign": sgn, "points": pts})
 
-            if pts.shape[0] >= 2:
-                P = pts
-                Q = np.roll(pts, -1, axis=0)
+            pts_seg = pts
+            if pts_seg.shape[0] >= 2 and np.linalg.norm(pts_seg[0] - pts_seg[-1]) <= 1e-12:
+                pts_seg = pts_seg[:-1]
+
+            if pts_seg.shape[0] >= 2:
+                P = pts_seg
+                Q = np.roll(pts_seg, -1, axis=0)
                 nseg = P.shape[0]
 
                 P_list.append(P)

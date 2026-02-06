@@ -8,10 +8,8 @@ import numpy as np
 from gradientcoil.optimize.save_npz import save_socp_bz_npz
 from gradientcoil.optimize.socp_bz import SocpBzSpec, solve_socp_bz
 from gradientcoil.physics.roi_sampling import (
-    dedup_points_with_weights,
     hammersley_sphere,
     sample_sphere_fibonacci,
-    sample_sphere_sym_hammersley,
     symmetrize_points,
 )
 from gradientcoil.surfaces.cylinder_unwrap import (
@@ -131,14 +129,16 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.add_argument("--roi-radius", type=float, default=0.1)
     parser.add_argument("--roi-n", type=int, default=64)
-    parser.add_argument("--sym-axes", default="x,y,z")
     parser.add_argument(
         "--roi-sampler",
-        choices=["hammersley", "fibonacci", "sym_hammersley"],
+        choices=["hammersley", "fibonacci"],
         default="hammersley",
     )
-    parser.add_argument("--roi-dedup", action="store_true")
-    parser.add_argument("--roi-dedup-eps", type=float, default=1e-12)
+    parser.add_argument(
+        "--roi-sym-axes",
+        default="",
+        help="Comma-separated axes to mirror ROI points (e.g., x,y,z).",
+    )
 
     parser.add_argument("--shim-max-order", type=int, default=1)
     parser.add_argument("--coeff", action="append", default=[])
@@ -188,19 +188,19 @@ def main(argv: list[str] | None = None) -> int:
 
     surfaces = _build_surfaces(args)
 
-    sym_axes = tuple(a.strip() for a in args.sym_axes.split(",") if a.strip())
     if args.roi_sampler == "fibonacci":
         roi_points = sample_sphere_fibonacci(args.roi_n, args.roi_radius, rotate=False)
-    elif args.roi_sampler == "sym_hammersley":
-        roi_points = sample_sphere_sym_hammersley(args.roi_n, args.roi_radius, sym_axes=sym_axes)
     else:
         roi_points = hammersley_sphere(args.roi_n, args.roi_radius, rotate=False)
-    roi_points_raw = symmetrize_points(roi_points, axes=sym_axes)
-    if args.roi_dedup:
-        roi_points, roi_weights = dedup_points_with_weights(roi_points_raw, args.roi_dedup_eps)
-    else:
-        roi_points = roi_points_raw
-        roi_weights = np.ones((roi_points.shape[0],), dtype=float)
+    if args.roi_sym_axes:
+        axes = tuple(
+            ax.strip().lower()
+            for ax in args.roi_sym_axes.split(",")
+            if ax.strip().lower() in {"x", "y", "z"}
+        )
+        if axes:
+            roi_points = symmetrize_points(roi_points, axes=axes)
+    roi_weights = np.ones((roi_points.shape[0],), dtype=float)
 
     L_ref = args.roi_radius if args.L_ref == "auto" else float(args.L_ref)
     coeffs = _parse_coeff_list(args.coeff)
@@ -280,8 +280,7 @@ def main(argv: list[str] | None = None) -> int:
         "roi_n": int(args.roi_n),
         "roi_radius": float(args.roi_radius),
         "roi_sampler": args.roi_sampler,
-        "roi_dedup": bool(args.roi_dedup),
-        "roi_dedup_eps": float(args.roi_dedup_eps),
+        "roi_sym_axes": args.roi_sym_axes,
         "source_kind": args.target_source,
         "coeffs": coeffs,
         "max_order": int(args.shim_max_order),

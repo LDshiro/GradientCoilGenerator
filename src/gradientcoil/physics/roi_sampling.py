@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from itertools import product
 
 import numpy as np
 
@@ -15,22 +15,6 @@ def _vdc_base2(n: int) -> np.ndarray:
             denom *= 2.0
             x += (m & 1) / denom
             m >>= 1
-        out[k] = x
-    return out
-
-
-def _vdc_base(n: int, base: int) -> np.ndarray:
-    if base < 2:
-        raise ValueError("base must be >= 2.")
-    out = np.empty(n, dtype=float)
-    for k in range(n):
-        x = 0.0
-        denom = 1.0
-        m = k
-        while m:
-            denom *= base
-            x += (m % base) / denom
-            m //= base
         out[k] = x
     return out
 
@@ -52,6 +36,33 @@ def _apply_random_rotation(pts: np.ndarray, *, seed: int | None = None) -> np.nd
         dtype=float,
     )
     return pts @ R.T
+
+
+def symmetrize_points(
+    points: np.ndarray, *, axes: tuple[str, ...] | list[str] = ("x", "y", "z")
+) -> np.ndarray:
+    """Mirror points across the selected axes (x/y/z)."""
+    pts = np.asarray(points, float)
+    if pts.size == 0:
+        return pts.copy()
+
+    axis_map = {"x": 0, "y": 1, "z": 2}
+    axes_norm = []
+    for ax in axes:
+        key = str(ax).lower()
+        if key in axis_map:
+            axes_norm.append(key)
+    if not axes_norm:
+        return pts.copy()
+
+    idx = [axis_map[ax] for ax in axes_norm]
+    out = []
+    for signs in product([1.0, -1.0], repeat=len(idx)):
+        mirrored = pts.copy()
+        for axis_i, s in zip(idx, signs, strict=False):
+            mirrored[:, axis_i] *= s
+        out.append(mirrored)
+    return np.vstack(out)
 
 
 def hammersley_sphere(
@@ -98,91 +109,3 @@ def sample_sphere_fibonacci(
         pts = _apply_random_rotation(pts, seed=seed)
 
     return radius * pts
-
-
-def sample_sphere_sym_hammersley(
-    n: int,
-    radius: float,
-    *,
-    sym_axes: Iterable[str] = ("x", "y", "z"),
-    base: int = 2,
-) -> np.ndarray:
-    """Generate Hammersley points on a sphere in a symmetry-aware fundamental domain."""
-    N = int(n)
-    if N <= 0:
-        return np.zeros((0, 3), dtype=float)
-
-    axes_set = set(sym_axes)
-    if "x" in axes_set and "y" in axes_set:
-        phi_min, phi_max = 0.0, 0.5 * np.pi
-    elif "x" in axes_set:
-        phi_min, phi_max = -0.5 * np.pi, 0.5 * np.pi
-    elif "y" in axes_set:
-        phi_min, phi_max = 0.0, np.pi
-    else:
-        phi_min, phi_max = 0.0, 2.0 * np.pi
-
-    z_min, z_max = (0.0, 1.0) if "z" in axes_set else (-1.0, 1.0)
-
-    u = (np.arange(N, dtype=float) + 0.5) / N
-    z = z_min + (z_max - z_min) * u
-    vdc = _vdc_base(N, base)
-    v = (vdc + 0.5 / N) % 1.0
-    phi = phi_min + (phi_max - phi_min) * v
-
-    r = np.sqrt(np.maximum(0.0, 1.0 - z * z))
-    x = r * np.cos(phi)
-    y = r * np.sin(phi)
-    pts = np.column_stack([x, y, z])
-    return radius * pts
-
-
-def symmetrize_points(points: np.ndarray, axes: Iterable[str] = ("x", "y", "z")) -> np.ndarray:
-    """Reflect points across specified axes."""
-    axes_set = set(axes)
-    P = np.asarray(points, dtype=float)
-    if P.size == 0:
-        return P.reshape(0, 3)
-
-    flips = [(1.0, 1.0, 1.0)]
-    for ax in axes_set:
-        if ax == "x":
-            flips = [f for f in flips] + [(-f[0], f[1], f[2]) for f in flips]
-        elif ax == "y":
-            flips = [f for f in flips] + [(f[0], -f[1], f[2]) for f in flips]
-        elif ax == "z":
-            flips = [f for f in flips] + [(f[0], f[1], -f[2]) for f in flips]
-        else:
-            raise ValueError("axes must be a subset of {'x','y','z'}.")
-
-    flips_unique = np.unique(np.array(flips, dtype=float), axis=0)
-    out = np.vstack([P * f for f in flips_unique])
-    return out
-
-
-def dedup_points_with_weights(
-    points: np.ndarray, eps: float = 0.0
-) -> tuple[np.ndarray, np.ndarray]:
-    """Deduplicate points within eps tolerance and return weights."""
-    P = np.asarray(points, dtype=float)
-    if P.ndim != 2 or P.shape[1] != 3:
-        raise ValueError("points must have shape (N, 3).")
-    if P.size == 0:
-        return P.reshape(0, 3), np.zeros((0,), dtype=float)
-    if eps < 0.0:
-        raise ValueError("eps must be non-negative.")
-
-    if eps == 0.0:
-        uniq, idx, counts = np.unique(P, axis=0, return_index=True, return_counts=True)
-        order = np.argsort(idx)
-        return uniq[order], counts[order].astype(float)
-
-    q = np.round(P / eps).astype(np.int64)
-    q = np.ascontiguousarray(q)
-    key_dtype = np.dtype([("x", np.int64), ("y", np.int64), ("z", np.int64)])
-    keys = q.view(key_dtype).reshape(-1)
-    _, idx, counts = np.unique(keys, return_index=True, return_counts=True)
-    order = np.argsort(idx)
-    uniq = P[idx[order]]
-    weights = counts[order].astype(float)
-    return uniq, weights

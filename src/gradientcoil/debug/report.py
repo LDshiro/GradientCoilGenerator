@@ -39,34 +39,18 @@ def summarize_surfaces(surfaces: list[SurfaceGrid]) -> list[dict]:
 def summarize_roi(
     points: Array,
     *,
-    points_raw: Array | None = None,
-    weights: Array | None = None,
     sampler: str | None = None,
-    dedup_enabled: bool = False,
-    dedup_eps: float = 0.0,
 ) -> dict:
     if points.size == 0:
         return {"count": 0}
     r = np.linalg.norm(points, axis=1)
-    count_used = int(points.shape[0])
-    count_raw = int(points_raw.shape[0]) if points_raw is not None else count_used
-    weights_sum = float(np.sum(weights)) if weights is not None else float(count_used)
     summary = {
-        "count": count_used,
-        "count_raw": count_raw,
-        "roi_count_raw": count_raw,
-        "roi_count_used": count_used,
-        "roi_unique_count": count_used,
-        "roi_weights_sum": weights_sum,
+        "count": int(points.shape[0]),
         "roi_sampler": sampler,
-        "roi_dedup_enabled": bool(dedup_enabled),
-        "roi_dedup_eps": float(dedup_eps),
         "radius_min": float(np.min(r)),
         "radius_max": float(np.max(r)),
         "radius_mean": float(np.mean(r)),
     }
-    if count_raw > 0:
-        summary["dup_ratio"] = 1.0 - (float(count_used) / float(count_raw))
     return summary
 
 
@@ -137,13 +121,6 @@ def write_summary_md(path: Path, summary: dict) -> None:
     roi = summary.get("roi", {})
     lines.append(f"- count: {roi.get('count', 0)}")
     lines.append(f"- roi_sampler: {roi.get('roi_sampler')}")
-    lines.append(f"- roi_count_raw: {roi.get('roi_count_raw')}")
-    lines.append(f"- roi_count_used: {roi.get('roi_count_used')}")
-    lines.append(f"- roi_weights_sum: {roi.get('roi_weights_sum')}")
-    lines.append(f"- roi_dedup_enabled: {roi.get('roi_dedup_enabled')}")
-    lines.append(f"- roi_dedup_eps: {roi.get('roi_dedup_eps')}")
-    if "dup_ratio" in roi:
-        lines.append(f"- dup_ratio: {roi.get('dup_ratio'):.3f}")
     lines.append("")
     lines.append("## Target")
     tgt = summary.get("target", {})

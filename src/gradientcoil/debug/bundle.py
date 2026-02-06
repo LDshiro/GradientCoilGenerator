@@ -21,10 +21,8 @@ from gradientcoil.debug.report import (
 )
 from gradientcoil.physics.emdm import build_A_xyz
 from gradientcoil.physics.roi_sampling import (
-    dedup_points_with_weights,
     hammersley_sphere,
     sample_sphere_fibonacci,
-    sample_sphere_sym_hammersley,
     symmetrize_points,
 )
 from gradientcoil.surfaces.cylinder_unwrap import (
@@ -56,10 +54,8 @@ class DebugBundleConfig:
     dirichlet_top_only: bool = False
     roi_radius: float = 0.1
     roi_n: int = 64
-    sym_axes: tuple[str, ...] = ("x", "y", "z")
     roi_sampler: str = "hammersley"
-    roi_dedup: bool = False
-    roi_dedup_eps: float = 1e-12
+    roi_sym_axes: tuple[str, ...] = ()
     shim_max_order: int = 2
     coeffs: dict[str, float] = field(default_factory=dict)
     scale_policy: str = "T_per_m"
@@ -162,6 +158,14 @@ def _parse_coeff_list(items: Iterable[str]) -> dict[str, float]:
     return coeffs
 
 
+def _parse_axes(value: str) -> tuple[str, ...]:
+    if not value:
+        return ()
+    parts = [p.strip().lower() for p in value.split(",") if p.strip()]
+    valid = {"x", "y", "z"}
+    return tuple(p for p in parts if p in valid)
+
+
 def generate_debug_bundle(cfg: DebugBundleConfig) -> Path:
     out_dir = _unique_bundle_dir(Path(cfg.out_dir))
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -183,24 +187,17 @@ def generate_debug_bundle(cfg: DebugBundleConfig) -> Path:
 
     if cfg.roi_sampler == "fibonacci":
         roi_points = sample_sphere_fibonacci(cfg.roi_n, cfg.roi_radius, rotate=False)
-    elif cfg.roi_sampler == "sym_hammersley":
-        roi_points = sample_sphere_sym_hammersley(cfg.roi_n, cfg.roi_radius, sym_axes=cfg.sym_axes)
     else:
         roi_points = hammersley_sphere(cfg.roi_n, cfg.roi_radius, rotate=False)
-    roi_points_raw = symmetrize_points(roi_points, axes=cfg.sym_axes)
-    if cfg.roi_dedup:
-        roi_points, roi_weights = dedup_points_with_weights(roi_points_raw, cfg.roi_dedup_eps)
-    else:
-        roi_points = roi_points_raw
-        roi_weights = np.ones((roi_points.shape[0],), dtype=float)
+    if cfg.roi_sym_axes:
+        roi_points = symmetrize_points(roi_points, axes=cfg.roi_sym_axes)
+    roi_weights = np.ones((roi_points.shape[0],), dtype=float)
     np.savez(
         out_dir / "roi.npz",
-        points_raw=roi_points_raw,
         points=roi_points,
         weights=roi_weights,
         sampler=np.asarray(cfg.roi_sampler, dtype="<U32"),
-        dedup_enabled=cfg.roi_dedup,
-        dedup_eps=float(cfg.roi_dedup_eps),
+        sym_axes=np.asarray(cfg.roi_sym_axes, dtype="<U8"),
     )
 
     L_ref = cfg.roi_radius if cfg.L_ref == "auto" else float(cfg.L_ref)
@@ -303,14 +300,7 @@ def generate_debug_bundle(cfg: DebugBundleConfig) -> Path:
 
     summary = {
         "surface": summarize_surfaces(surfaces),
-        "roi": summarize_roi(
-            roi_points,
-            points_raw=roi_points_raw,
-            weights=roi_weights,
-            sampler=cfg.roi_sampler,
-            dedup_enabled=cfg.roi_dedup,
-            dedup_eps=float(cfg.roi_dedup_eps),
-        ),
+        "roi": summarize_roi(roi_points, sampler=cfg.roi_sampler),
         "target": summarize_target(
             cfg.coeffs, float(L_ref), cfg.scale_policy, Bz_target, y_line, Bz_y, x_line, Bz_x
         ),
@@ -358,14 +348,16 @@ def parse_args(argv: list[str] | None = None) -> DebugBundleConfig:
 
     parser.add_argument("--roi-radius", type=float, default=0.1)
     parser.add_argument("--roi-n", type=int, default=64)
-    parser.add_argument("--sym-axes", default="x,y,z")
     parser.add_argument(
         "--roi-sampler",
-        choices=["hammersley", "fibonacci", "sym_hammersley"],
+        choices=["hammersley", "fibonacci"],
         default="hammersley",
     )
-    parser.add_argument("--roi-dedup", action="store_true")
-    parser.add_argument("--roi-dedup-eps", type=float, default=1e-12)
+    parser.add_argument(
+        "--roi-sym-axes",
+        default="",
+        help="Comma-separated axes to mirror ROI points (e.g., x,y,z).",
+    )
 
     parser.add_argument("--shim-max-order", type=int, default=2)
     parser.add_argument("--coeff", action="append", default=[])
@@ -379,7 +371,6 @@ def parse_args(argv: list[str] | None = None) -> DebugBundleConfig:
     args = parser.parse_args(argv)
 
     coeffs = _parse_coeff_list(args.coeff)
-    sym_axes = tuple(ax.strip() for ax in args.sym_axes.split(",") if ax.strip())
     cache_dir = Path(args.cache_dir) if args.cache_dir else None
 
     return DebugBundleConfig(
@@ -401,10 +392,8 @@ def parse_args(argv: list[str] | None = None) -> DebugBundleConfig:
         dirichlet_top_only=args.dirichlet_top_only,
         roi_radius=args.roi_radius,
         roi_n=args.roi_n,
-        sym_axes=sym_axes or ("x", "y", "z"),
         roi_sampler=args.roi_sampler,
-        roi_dedup=args.roi_dedup,
-        roi_dedup_eps=args.roi_dedup_eps,
+        roi_sym_axes=_parse_axes(args.roi_sym_axes),
         shim_max_order=args.shim_max_order,
         coeffs=coeffs,
         scale_policy=args.scale_policy,

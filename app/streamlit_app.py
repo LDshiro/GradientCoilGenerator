@@ -108,11 +108,20 @@ def main() -> None:
     from gradientcoil.io.results_npz import ContourField, extract_contour_fields
     from gradientcoil.optimize.socp_bz import SocpBzSpec, estimate_socp_bz_problem_size
     from gradientcoil.physics.roi_sampling import (
-        dedup_points_with_weights,
         hammersley_sphere,
         sample_sphere_fibonacci,
-        sample_sphere_sym_hammersley,
         symmetrize_points,
+    )
+    from gradientcoil.postprocess.coil_eval import (
+        MU0_BIOT_DEFAULT,
+        biot_savart_Bz_from_loops,
+        fallback_roi_radius_from_loops,
+        infer_aperture_radius,
+        infer_g_target,
+        infer_roi_radius,
+        infer_surface_z_positions,
+        load_contours_resampled,
+        parse_source_config,
     )
     from gradientcoil.postprocess.contours_resample import (
         ContourFilterConfig,
@@ -133,7 +142,7 @@ def main() -> None:
     st.set_page_config(page_title="GradientCoil GUI", layout="wide")
     st.markdown("# Gradient Coil Designer")
 
-    tab_conditions, tab_results = st.tabs(["条件", "結果"])
+    tab_conditions, tab_results, tab_eval = st.tabs(["条件", "結果", "コイル評価"])
 
     with tab_conditions:
         run_clicked = False
@@ -151,24 +160,20 @@ def main() -> None:
             roi_radius = st.number_input("ROI radius", min_value=0.0, value=0.1, format="%.4f")
             roi_points_n = int(st.number_input("ROI points", min_value=0, value=128, step=1))
             roi_rotate = st.checkbox("ROI rotate", value=False)
-            sym_axes = st.multiselect(
-                "ROI symmetry axes",
-                options=["x", "y", "z"],
-                default=["x", "y", "z"],
-            )
             roi_sampler = st.selectbox(
                 "ROI sampler",
-                options=["hammersley", "fibonacci", "sym_hammersley"],
+                options=["hammersley", "fibonacci"],
                 index=0,
                 format_func={
                     "hammersley": "Hammersley (quasi-uniform)",
                     "fibonacci": "Fibonacci (quasi-uniform)",
-                    "sym_hammersley": "Symmetric Hammersley (axis-symmetric)",
                 }.get,
             )
-            roi_dedup = st.checkbox("ROI dedup", value=False)
-            roi_dedup_eps = st.number_input(
-                "ROI dedup eps", min_value=0.0, value=1e-12, format="%.2e"
+            roi_sym_axes = st.multiselect(
+                "ROI symmetry axes",
+                options=["x", "y", "z"],
+                default=[],
+                help="選択した軸で ROI 点群を鏡映します。",
             )
 
             st.markdown("### Target")
@@ -292,10 +297,8 @@ def main() -> None:
                 "roi_radius": roi_radius,
                 "roi_points": roi_points_n,
                 "roi_rotate": roi_rotate,
-                "sym_axes": sym_axes,
                 "roi_sampler": roi_sampler,
-                "roi_dedup": roi_dedup,
-                "roi_dedup_eps": roi_dedup_eps,
+                "roi_sym_axes": roi_sym_axes,
                 "target_source": target_source,
                 "target_display": target_display,
                 "max_order": max_order,
@@ -344,10 +347,6 @@ def main() -> None:
                             rotate=roi_rotate,
                             seed=0,
                         )
-                    elif roi_sampler == "sym_hammersley":
-                        roi_points = sample_sphere_sym_hammersley(
-                            roi_points_n, roi_radius, sym_axes=tuple(sym_axes)
-                        )
                     else:
                         roi_points = hammersley_sphere(
                             roi_points_n,
@@ -355,6 +354,8 @@ def main() -> None:
                             rotate=roi_rotate,
                             seed=0,
                         )
+                    if roi_sym_axes:
+                        roi_points = symmetrize_points(roi_points, axes=tuple(roi_sym_axes))
                 else:
                     roi_points = None
                 fig = make_problem_setup_figure_plotly(
@@ -419,14 +420,7 @@ def main() -> None:
                 st.plotly_chart(fig, use_container_width=True)
 
                 if roi_points is not None:
-                    roi_points_raw = symmetrize_points(roi_points, axes=tuple(sym_axes))
-                    if roi_dedup:
-                        roi_points_used, _ = dedup_points_with_weights(
-                            roi_points_raw, roi_dedup_eps
-                        )
-                    else:
-                        roi_points_used = roi_points_raw
-
+                    roi_points_used = roi_points
                     J_max = float(delta_s / pitch_min) if (use_pitch and pitch_min > 0.0) else 0.0
                     size_spec = SocpBzSpec(
                         use_tv=bool(use_tv),
@@ -501,10 +495,8 @@ def main() -> None:
                     "roi_radius": float(roi_radius),
                     "roi_n": int(roi_points_n),
                     "roi_rotate": bool(roi_rotate),
-                    "sym_axes": tuple(sym_axes),
                     "sampler": roi_sampler,
-                    "roi_dedup": bool(roi_dedup),
-                    "roi_dedup_eps": float(roi_dedup_eps),
+                    "sym_axes": list(roi_sym_axes),
                 },
                 "target": {
                     "source_kind": target_source,
@@ -559,185 +551,468 @@ def main() -> None:
         entries = list_runs(runs_dir)
         if not entries:
             st.info("runs/ に結果がありません。")
-            return
-
-        labels = [entry.label for entry in entries]
-        selected_label = st.session_state.get("selected_run_label")
-        default_index = labels.index(selected_label) if selected_label in labels else 0
-
-        selected = st.selectbox("Run", labels, index=default_index)
-        entry = entries[labels.index(selected)]
-        run_npz_path = entry.path / "run.npz" if entry.kind == "folder" else entry.path
-
-        config = load_run_config(entry)
-        solver = load_run_solver(entry)
-
-        with load_run_npz(entry) as npz:
-            fields = extract_contour_fields(npz)
-
-        st.caption(f"path: {entry.path}")
-        if config:
-            with st.expander("config.json", expanded=False):
-                st.json(config)
-        if solver:
-            with st.expander("solver.json", expanded=False):
-                st.json(solver)
-
-        if not fields:
-            st.warning("可視化できるデータが見つかりません。")
-            return
-
-        st.subheader("PostProcess")
-        with st.expander("PostProcess settings", expanded=False):
-            st.caption(f"run_npz: {run_npz_path}")
-            pp_config_json = st.text_input("config_json (optional)", value="")
-            pp_col1, pp_col2 = st.columns(2)
-            with pp_col1:
-                pp_level_mode = st.selectbox("level_mode", ["n_levels", "delta_s"], index=0)
-                pp_n_levels = int(st.number_input("n_levels_total", min_value=2, value=26, step=2))
-                pp_delta_s = st.number_input("delta_s", min_value=0.0, value=1.0, format="%.4f")
-                pp_ds_segment = st.number_input(
-                    "ds_segment", min_value=0.0, value=0.005, format="%.4f"
-                )
-                pp_extraction = st.selectbox("extraction_method", ["auto", "grid", "tri"], index=0)
-            with pp_col2:
-                pp_min_vertices = int(
-                    st.number_input("min_vertices", min_value=3, value=12, step=1)
-                )
-                pp_area_eps = st.number_input("area_eps", min_value=0.0, value=1e-6, format="%.2e")
-                pp_close_tol = st.number_input(
-                    "close_tol", min_value=0.0, value=1e-10, format="%.2e"
-                )
-                pp_tri_refine = st.checkbox("tri_refine", value=True)
-                pp_flat_ratio = st.number_input(
-                    "flat_ratio", min_value=0.0, value=0.02, format="%.3f"
-                )
-                pp_subdiv = int(st.number_input("subdiv", min_value=0, value=2, step=1))
-            pp_show_filled = st.checkbox("show_filled (debug)", value=False)
-            pp_show_level_lines = st.checkbox("show_level_lines (debug)", value=False)
-            pp_show_loops = st.checkbox("show_extracted_loops (debug)", value=False)
-            default_out = runs_dir / f"contours_resampled_{entry.label}.npz"
-            pp_out_npz = st.text_input("out_npz", value=str(default_out))
-
-        postprocess_key = f"postprocess_result_{entry.label}"
-        if st.button("PostProcess"):
-            post_cfg = PostprocessConfig(
-                levels=ContourLevelConfig(
-                    mode=pp_level_mode,
-                    n_levels_total=pp_n_levels,
-                    delta_s=pp_delta_s,
-                ),
-                filters=ContourFilterConfig(
-                    min_vertices=pp_min_vertices,
-                    area_eps=pp_area_eps,
-                    close_tol=pp_close_tol,
-                ),
-                triangulation=TriangulationConfig(
-                    use_refine=pp_tri_refine,
-                    flat_ratio=pp_flat_ratio,
-                    subdiv=pp_subdiv,
-                ),
-                plots=PlotConfig(
-                    show_filled=pp_show_filled,
-                    show_level_lines=pp_show_level_lines,
-                    show_extracted_loops=pp_show_loops,
-                ),
-                resample=ResampleConfig(ds_segment=pp_ds_segment),
-                extraction_method=pp_extraction,
-            )
-            try:
-                config_json_path = pp_config_json.strip() or None
-                result, run_cfg = process_run(run_npz_path, config_json_path, post_cfg)
-                save_resampled_npz(
-                    pp_out_npz,
-                    result=result,
-                    run_cfg=run_cfg,
-                    run_npz_path=run_npz_path,
-                    cfg=post_cfg,
-                )
-                st.session_state[postprocess_key] = result
-                st.success(f"PostProcess 完了: {pp_out_npz}")
-                st.caption(
-                    f"loops={len(result.loops_resampled)} segments={result.segments['P'].shape[0]}"
-                )
-            except Exception as exc:
-                st.error(f"PostProcess 失敗: {exc}")
-
-        import io
-
-        import matplotlib.pyplot as plt
-
-        def _extend_field(field: ContourField) -> ContourField:
-            X_ext, Y_ext, S_ext = periodic_theta_extend(field.X, field.Y, field.S)
-            return ContourField(name=field.name, X=X_ext, Y=Y_ext, S=S_ext)
-
-        surface_type = config.get("surface_type") or config.get("surface")
-        if surface_type == "disk_polar":
-            fields = [_extend_field(field) for field in fields]
         else:
-            fields = [
-                _extend_field(field) if field.name == "S_polar" else field for field in fields
-            ]
 
-        post_result = st.session_state.get(postprocess_key)
+            labels = [entry.label for entry in entries]
+            selected_label = st.session_state.get("selected_run_label")
+            default_index = labels.index(selected_label) if selected_label in labels else 0
 
-        def _surface_index_from_name(name: str) -> int | None:
-            if name == "S_grid":
-                return 0
-            if name.startswith("S_grid_"):
-                try:
-                    return int(name.split("_")[-1])
-                except ValueError:
+            selected = st.selectbox("Run", labels, index=default_index)
+            entry = entries[labels.index(selected)]
+            run_npz_path = entry.path / "run.npz" if entry.kind == "folder" else entry.path
+
+            config = load_run_config(entry)
+            solver = load_run_solver(entry)
+
+            with load_run_npz(entry) as npz:
+                fields = extract_contour_fields(npz)
+
+            st.caption(f"path: {entry.path}")
+            if config:
+                with st.expander("config.json", expanded=False):
+                    st.json(config)
+            if solver:
+                with st.expander("solver.json", expanded=False):
+                    st.json(solver)
+
+            if not fields:
+                st.warning("可視化できるデータが見つかりません。")
+            else:
+
+                st.subheader("PostProcess")
+                with st.expander("PostProcess settings", expanded=False):
+                    st.caption(f"run_npz: {run_npz_path}")
+                    pp_config_json = st.text_input("config_json (optional)", value="")
+                    pp_col1, pp_col2 = st.columns(2)
+                    with pp_col1:
+                        pp_level_mode = st.selectbox("level_mode", ["n_levels", "delta_s"], index=0)
+                        pp_n_levels = int(
+                            st.number_input("n_levels_total", min_value=2, value=26, step=2)
+                        )
+                        pp_delta_s = st.number_input(
+                            "delta_s", min_value=0.0, value=1.0, format="%.4f"
+                        )
+                        pp_ds_segment = st.number_input(
+                            "ds_segment", min_value=0.0, value=0.005, format="%.4f"
+                        )
+                        pp_extraction = st.selectbox(
+                            "extraction_method", ["auto", "grid", "tri"], index=0
+                        )
+                    with pp_col2:
+                        pp_min_vertices = int(
+                            st.number_input("min_vertices", min_value=3, value=12, step=1)
+                        )
+                        pp_area_eps = st.number_input(
+                            "area_eps", min_value=0.0, value=1e-6, format="%.2e"
+                        )
+                        pp_close_tol = st.number_input(
+                            "close_tol", min_value=0.0, value=1e-10, format="%.2e"
+                        )
+                        pp_tri_refine = st.checkbox("tri_refine", value=True)
+                        pp_flat_ratio = st.number_input(
+                            "flat_ratio", min_value=0.0, value=0.02, format="%.3f"
+                        )
+                        pp_subdiv = int(st.number_input("subdiv", min_value=0, value=2, step=1))
+                    pp_show_filled = st.checkbox("show_filled (debug)", value=False)
+                    pp_show_level_lines = st.checkbox("show_level_lines (debug)", value=False)
+                    pp_show_loops = st.checkbox("show_extracted_loops (debug)", value=False)
+                    default_out = runs_dir / f"contours_resampled_{entry.label}.npz"
+                    pp_out_npz = st.text_input("out_npz", value=str(default_out))
+
+                postprocess_key = f"postprocess_result_{entry.label}"
+                if st.button("PostProcess"):
+                    post_cfg = PostprocessConfig(
+                        levels=ContourLevelConfig(
+                            mode=pp_level_mode,
+                            n_levels_total=pp_n_levels,
+                            delta_s=pp_delta_s,
+                        ),
+                        filters=ContourFilterConfig(
+                            min_vertices=pp_min_vertices,
+                            area_eps=pp_area_eps,
+                            close_tol=pp_close_tol,
+                        ),
+                        triangulation=TriangulationConfig(
+                            use_refine=pp_tri_refine,
+                            flat_ratio=pp_flat_ratio,
+                            subdiv=pp_subdiv,
+                        ),
+                        plots=PlotConfig(
+                            show_filled=pp_show_filled,
+                            show_level_lines=pp_show_level_lines,
+                            show_extracted_loops=pp_show_loops,
+                        ),
+                        resample=ResampleConfig(ds_segment=pp_ds_segment),
+                        extraction_method=pp_extraction,
+                    )
+                    try:
+                        config_json_path = pp_config_json.strip() or None
+                        result, run_cfg = process_run(run_npz_path, config_json_path, post_cfg)
+                        save_resampled_npz(
+                            pp_out_npz,
+                            result=result,
+                            run_cfg=run_cfg,
+                            run_npz_path=run_npz_path,
+                            cfg=post_cfg,
+                        )
+                        st.session_state[postprocess_key] = result
+                        st.success(f"PostProcess 完了: {pp_out_npz}")
+                        st.caption(
+                            f"loops={len(result.loops_resampled)} segments={result.segments['P'].shape[0]}"
+                        )
+                    except Exception as exc:
+                        st.error(f"PostProcess 失敗: {exc}")
+
+                import io
+
+                import matplotlib.pyplot as plt
+
+                def _extend_field(field: ContourField) -> ContourField:
+                    X_ext, Y_ext, S_ext = periodic_theta_extend(field.X, field.Y, field.S)
+                    return ContourField(name=field.name, X=X_ext, Y=Y_ext, S=S_ext)
+
+                surface_type = config.get("surface_type") or config.get("surface")
+                if surface_type == "disk_polar":
+                    fields = [_extend_field(field) for field in fields]
+                else:
+                    fields = [
+                        _extend_field(field) if field.name == "S_polar" else field
+                        for field in fields
+                    ]
+
+                post_result = st.session_state.get(postprocess_key)
+
+                def _surface_index_from_name(name: str) -> int | None:
+                    if name == "S_grid":
+                        return 0
+                    if name.startswith("S_grid_"):
+                        try:
+                            return int(name.split("_")[-1])
+                        except ValueError:
+                            return None
                     return None
-            return None
 
-        for field in fields:
-            idx = _surface_index_from_name(field.name)
-            col_left, col_right = st.columns(2)
-            with col_left:
-                fig, ax = plt.subplots(figsize=(6, 4), dpi=360)
-                levels = 60
-                cs = ax.contourf(field.X, field.Y, field.S, levels=levels)
-                ax.contour(field.X, field.Y, field.S, levels=levels, colors="k", linewidths=0.6)
-                fig.colorbar(cs, ax=ax)
-                ax.set_title(field.name)
-                ax.set_aspect("equal", adjustable="box")
-                buf = io.BytesIO()
-                fig.savefig(buf, format="png", dpi=360, bbox_inches="tight")
-                buf.seek(0)
-                st.image(buf, width=1000)
-                plt.close(fig)
+                for field in fields:
+                    idx = _surface_index_from_name(field.name)
+                    col_left, col_right = st.columns(2)
+                    with col_left:
+                        fig, ax = plt.subplots(figsize=(6, 4), dpi=360)
+                        levels = 60
+                        cs = ax.contourf(field.X, field.Y, field.S, levels=levels)
+                        ax.contour(
+                            field.X, field.Y, field.S, levels=levels, colors="k", linewidths=0.6
+                        )
+                        fig.colorbar(cs, ax=ax)
+                        ax.set_title(field.name)
+                        ax.set_aspect("equal", adjustable="box")
+                        buf = io.BytesIO()
+                        fig.savefig(buf, format="png", dpi=360, bbox_inches="tight")
+                        buf.seek(0)
+                        st.image(buf, width=1000)
+                        plt.close(fig)
 
-            with col_right:
-                if post_result is None or idx is None:
-                    st.info("PostProcess 未実行、または対象外フィールドです。")
-                    continue
-                loops = [loop for loop in post_result.loops_resampled if loop.get("surface") == idx]
-                fig, ax = plt.subplots(figsize=(4, 4), dpi=360)
-                for loop in loops:
-                    pts = np.asarray(loop["points"], float)
-                    if pts.size == 0:
-                        continue
-                    ax.plot(pts[:, 0], pts[:, 1], color="black", lw=0.7)
-                ax.set_title(f"PostProcess (surface {idx})")
-                ax.set_aspect("equal", adjustable="box")
-                ax.set_box_aspect(1)
-                ax.set_xlabel("x [m]")
-                ax.set_ylabel("y [m]")
-                ax.grid(True, alpha=0.3)
-                if loops:
-                    all_pts = np.vstack([np.asarray(loop["points"], float) for loop in loops])
-                    xmin, ymin = np.min(all_pts, axis=0)
-                    xmax, ymax = np.max(all_pts, axis=0)
-                    pad_x = 0.05 * max(1e-9, xmax - xmin)
-                    pad_y = 0.05 * max(1e-9, ymax - ymin)
-                    ax.set_xlim(xmin - pad_x, xmax + pad_x)
-                    ax.set_ylim(ymin - pad_y, ymax + pad_y)
-                buf = io.BytesIO()
-                fig.savefig(buf, format="png", dpi=360, bbox_inches="tight")
-                buf.seek(0)
-                st.image(buf, width=1000)
-                plt.close(fig)
+                    with col_right:
+                        if post_result is None or idx is None:
+                            st.info("PostProcess 未実行、または対象外フィールドです。")
+                            continue
+                        loops = [
+                            loop
+                            for loop in post_result.loops_resampled
+                            if loop.get("surface") == idx
+                        ]
+                        fig, ax = plt.subplots(figsize=(4, 4), dpi=360)
+                        for loop in loops:
+                            pts = np.asarray(loop["points"], float)
+                            if pts.size == 0:
+                                continue
+                            ax.plot(pts[:, 0], pts[:, 1], color="black", lw=0.7)
+                        ax.set_title(f"PostProcess (surface {idx})")
+                        ax.set_aspect("equal", adjustable="box")
+                        ax.set_box_aspect(1)
+                        ax.set_xlabel("x [m]")
+                        ax.set_ylabel("y [m]")
+                        ax.grid(True, alpha=0.3)
+                        if loops:
+                            all_pts = np.vstack(
+                                [np.asarray(loop["points"], float) for loop in loops]
+                            )
+                            xmin, ymin = np.min(all_pts, axis=0)
+                            xmax, ymax = np.max(all_pts, axis=0)
+                            pad_x = 0.05 * max(1e-9, xmax - xmin)
+                            pad_y = 0.05 * max(1e-9, ymax - ymin)
+                            ax.set_xlim(xmin - pad_x, xmax + pad_x)
+                            ax.set_ylim(ymin - pad_y, ymax + pad_y)
+                        buf = io.BytesIO()
+                        fig.savefig(buf, format="png", dpi=360, bbox_inches="tight")
+                        buf.seek(0)
+                        st.image(buf, width=1000)
+                        plt.close(fig)
+
+    with tab_eval:
+        st.subheader("コイル評価 (Biot-Savart)")
+        runs_dir = ROOT / "runs"
+        runs_dir.mkdir(exist_ok=True)
+        contour_files = sorted(
+            [
+                p
+                for p in runs_dir.iterdir()
+                if p.is_file() and p.name.startswith("contours_resampled_")
+            ],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not contour_files:
+            st.info("contours_resampled_*.npz がありません。PostProcess を実行してください。")
+        else:
+            labels = [p.name for p in contour_files]
+            selected = st.selectbox(
+                "Contours NPZ",
+                labels,
+                index=0,
+                key="coil_eval_contours",
+            )
+            contour_path = contour_files[labels.index(selected)]
+            loops, meta = load_contours_resampled(contour_path)
+            cfg = parse_source_config(meta)
+
+            if cfg is None:
+                st.warning("source_config_json が見つからないため run.npz を選択してください。")
+                run_entries = list_runs(runs_dir)
+                if run_entries:
+                    run_labels = [entry.label for entry in run_entries]
+                    run_selected = st.selectbox("Run (fallback)", run_labels, key="coil_eval_run")
+                    run_entry = run_entries[run_labels.index(run_selected)]
+                    cfg = load_run_config(run_entry)
+                else:
+                    st.info("run.npz がありません。")
+
+            if not loops:
+                st.warning("loops_resampled が見つかりません。")
+            else:
+                import matplotlib.cm as cm
+                import matplotlib.colors as mcolors
+                import matplotlib.pyplot as plt
+                import plotly.graph_objects as go
+
+                roi_radius = infer_roi_radius(cfg) or fallback_roi_radius_from_loops(loops)
+                aperture_radius = infer_aperture_radius(cfg)
+                g_target_default = infer_g_target(cfg) or 0.0
+                z_by_surface = infer_surface_z_positions(cfg, loops)
+                delta_s = meta.get("delta_s") or 1.0
+
+                col_ctrl, col_plot = st.columns([1, 3])
+                with col_ctrl:
+                    st.markdown("### 入力")
+                    st.caption(f"NPZ: {contour_path.name}")
+                    if meta.get("source_npz"):
+                        st.caption(f"source_npz: {meta.get('source_npz')}")
+                    st.caption(f"loops: {len(loops)}")
+                    if cfg:
+                        with st.expander("config (from source_config_json)", expanded=False):
+                            st.json(cfg)
+
+                    st.markdown("### 電流・評価設定")
+                    use_delta_s = st.checkbox("I_per_turn = delta_s", value=True)
+                    if use_delta_s:
+                        I_per_turn = float(delta_s)
+                        st.number_input(
+                            "I_per_turn (auto=delta_s)",
+                            value=float(delta_s),
+                            format="%.4f",
+                            disabled=True,
+                        )
+                    else:
+                        I_per_turn = st.number_input(
+                            "I_per_turn [A]", value=float(delta_s), format="%.4f"
+                        )
+
+                    mu0 = st.number_input("mu0", value=float(MU0_BIOT_DEFAULT), format="%.6e")
+                    n_x_slices = int(st.number_input("N_X_SLICES", min_value=1, value=9, step=1))
+                    n_y_samples = int(
+                        st.number_input("N_Y_SAMPLES", min_value=11, value=401, step=10)
+                    )
+                    y_span_factor = st.number_input(
+                        "y_span_factor", min_value=0.5, value=2.5, step=0.1
+                    )
+                    bz_z_scale = st.number_input("Bz z-scale", min_value=0.0, value=100.0, step=1.0)
+
+                    st.markdown("### 表示設定")
+                    show_roi = st.checkbox("show ROI circle", value=True)
+                    show_aperture = st.checkbox("show aperture circle", value=True)
+                    show_bz = st.checkbox("show Bz profiles", value=True)
+                    g_target = st.number_input(
+                        "G_target [T/m] (optional)", value=float(g_target_default), format="%.4f"
+                    )
+                    show_ideal = st.checkbox("show ideal line", value=bool(g_target_default))
+
+                    compute = st.button("Compute Bz & Plot")
+                    param_signature = (
+                        str(contour_path),
+                        float(I_per_turn),
+                        float(mu0),
+                        int(n_x_slices),
+                        int(n_y_samples),
+                        float(y_span_factor),
+                        float(bz_z_scale),
+                        float(g_target),
+                        bool(show_ideal),
+                    )
+                    cache_key = "coil_eval_result"
+
+                with col_plot:
+                    fig = go.Figure()
+                    for loop in loops:
+                        pts = np.asarray(loop.get("points", []), float)
+                        if pts.size == 0:
+                            continue
+                        sign = int(loop.get("sign", 1))
+                        surface_idx = int(loop.get("surface", 0))
+                        z_plane = float(z_by_surface.get(surface_idx, 0.0))
+                        color = "red" if sign > 0 else "blue"
+                        fig.add_trace(
+                            go.Scatter3d(
+                                x=pts[:, 0],
+                                y=pts[:, 1],
+                                z=np.full(pts.shape[0], z_plane),
+                                mode="lines",
+                                line=dict(color=color, width=3),
+                                showlegend=False,
+                            )
+                        )
+
+                    if roi_radius and show_roi:
+                        th = np.linspace(0.0, 2.0 * np.pi, 400)
+                        fig.add_trace(
+                            go.Scatter3d(
+                                x=roi_radius * np.cos(th),
+                                y=roi_radius * np.sin(th),
+                                z=np.zeros_like(th),
+                                mode="lines",
+                                line=dict(color="black", width=2, dash="dot"),
+                                name="ROI",
+                            )
+                        )
+
+                    if aperture_radius and show_aperture:
+                        th = np.linspace(0.0, 2.0 * np.pi, 400)
+                        fig.add_trace(
+                            go.Scatter3d(
+                                x=aperture_radius * np.cos(th),
+                                y=aperture_radius * np.sin(th),
+                                z=np.zeros_like(th),
+                                mode="lines",
+                                line=dict(color="black", width=2, dash="dash"),
+                                name="Aperture",
+                            )
+                        )
+
+                    cached = st.session_state.get(cache_key)
+                    if cached and cached.get("signature") != param_signature:
+                        cached = None
+
+                    if compute and show_bz and roi_radius:
+                        xs = np.linspace(-0.9 * roi_radius, 0.9 * roi_radius, n_x_slices)
+                        xs = np.unique(np.concatenate(([0.0], xs)))
+                        xs = xs[np.argsort(np.abs(xs))]
+                        y_line = np.linspace(
+                            -roi_radius * y_span_factor,
+                            roi_radius * y_span_factor,
+                            n_y_samples,
+                        )
+                        colors = [
+                            mcolors.to_hex(c)
+                            for c in cm.tab10(np.linspace(0.0, 1.0, max(1, len(xs))))
+                        ]
+                        with st.spinner("Computing Bz profiles..."):
+                            profiles: list[tuple[float, np.ndarray]] = []
+                            for x0 in xs:
+                                P = np.column_stack(
+                                    [np.full_like(y_line, x0), y_line, np.zeros_like(y_line)]
+                                )
+                                Bz = biot_savart_Bz_from_loops(
+                                    loops,
+                                    z_by_surface,
+                                    P,
+                                    I_per_turn=I_per_turn,
+                                    mu0=mu0,
+                                )
+                                profiles.append((float(x0), Bz))
+                        cached = {
+                            "signature": param_signature,
+                            "profiles": profiles,
+                            "y_line": y_line,
+                        }
+                        st.session_state[cache_key] = cached
+
+                    if cached and show_bz and roi_radius:
+                        profiles = cached["profiles"]
+                        y_line = cached["y_line"]
+
+                        for idx, (x0, Bz) in enumerate(profiles):
+                            width = 6 if np.isclose(x0, 0.0) else 3
+                            fig.add_trace(
+                                go.Scatter3d(
+                                    x=np.full_like(y_line, x0),
+                                    y=y_line,
+                                    z=bz_z_scale * Bz,
+                                    mode="lines",
+                                    line=dict(color=colors[idx % len(colors)], width=width),
+                                    name=f"x={x0:.3f}",
+                                )
+                            )
+
+                        if show_ideal and g_target:
+                            Bz_ideal = g_target * y_line
+                            fig.add_trace(
+                                go.Scatter3d(
+                                    x=np.zeros_like(y_line),
+                                    y=y_line,
+                                    z=bz_z_scale * Bz_ideal,
+                                    mode="lines",
+                                    line=dict(color="gray", width=4, dash="dash"),
+                                    name="ideal",
+                                )
+                            )
+
+                        fig.update_layout(
+                            scene=dict(
+                                xaxis_title="x [m]",
+                                yaxis_title="y [m]",
+                                zaxis_title="z / Bz",
+                                aspectmode="data",
+                            ),
+                            height=700,
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+
+                        fig2, ax = plt.subplots(figsize=(6.6, 4.2), dpi=200)
+                        _x0, Bz0 = profiles[0]
+                        ax.plot(y_line * 1e3, Bz0 * 1e6, label="Biot-Savart Bz [uT]")
+                        if show_ideal and g_target:
+                            ax.plot(
+                                y_line * 1e3,
+                                (g_target * y_line) * 1e6,
+                                "--",
+                                label="Ideal G*y [uT]",
+                            )
+                        ax.set_xlabel("y at z=0 [mm]")
+                        ax.set_ylabel("Bz [uT]")
+                        ax.grid(True, alpha=0.3)
+                        ax.legend()
+                        st.pyplot(fig2)
+                    elif show_bz and roi_radius:
+                        st.info("Bz を表示するには Compute Bz & Plot を実行してください。")
+                    else:
+                        fig.update_layout(
+                            scene=dict(
+                                xaxis_title="x [m]",
+                                yaxis_title="y [m]",
+                                zaxis_title="z",
+                                aspectmode="data",
+                            ),
+                            height=700,
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
 
 
 if __name__ == "__main__":
