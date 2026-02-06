@@ -248,13 +248,13 @@ def main() -> None:
             use_pitch = st.checkbox("use_pitch", value=False)
             delta_s = st.number_input("delta_S", min_value=0.0, value=0.0020, format="%.4f")
             pitch_min = st.number_input("pitch_min", min_value=0.0, value=0.0001, format="%.4f")
-            use_tv_default = surface_type == "disk_polar"
+            use_tv_default = False if surface_type == "disk_polar" else surface_type == "plane_cart"
             lambda_tv_default = 5.00e-8
             use_tv = st.checkbox("use_tv", value=use_tv_default)
             lambda_tv = st.number_input(
                 "lambda_tv", min_value=0.0, value=lambda_tv_default, format="%.2e"
             )
-            use_power_default = surface_type in {"cylinder_unwrap", "disk_polar"}
+            use_power_default = surface_type == "cylinder_unwrap"
             lambda_pwr_default = 3.00e-2
             use_power = st.checkbox("use_power", value=use_power_default)
             lambda_pwr = st.number_input(
@@ -263,23 +263,35 @@ def main() -> None:
             use_tgv = st.checkbox("use_tgv", value=False)
             alpha1_tgv = st.number_input("alpha1_tgv", min_value=0.0, value=1.0e-6, format="%.3e")
             alpha0_tgv = st.number_input("alpha0_tgv", min_value=0.0, value=1.0e-6, format="%.3e")
-            tgv_area_weights = st.checkbox("tgv_area_weights", value=True)
+            tgv_area_weights_default = False if surface_type == "disk_polar" else True
+            tgv_area_weights = st.checkbox("tgv_area_weights", value=tgv_area_weights_default)
             with st.expander("Curvature regularizer (grad-grad)", expanded=False):
                 st.caption("隣接勾配差分（曲がり）を抑える。R1はSOCP、ENは二次項。")
-                use_curv_r1 = st.checkbox("use_curv_r1", value=False)
+                use_curv_r1_default = surface_type == "disk_polar"
+                use_curv_r1 = st.checkbox("use_curv_r1", value=use_curv_r1_default)
+                lambda_curv_r1_default = 1.0e-7 if surface_type == "disk_polar" else 0.0
                 lambda_curv_r1 = st.number_input(
-                    "lambda_curv_r1", min_value=0.0, value=0.0, format="%.2e"
+                    "lambda_curv_r1",
+                    min_value=0.0,
+                    value=lambda_curv_r1_default,
+                    format="%.2e",
                 )
                 use_curv_en = st.checkbox("use_curv_en", value=False)
                 lambda_curv_en = st.number_input(
                     "lambda_curv_en", min_value=0.0, value=0.0, format="%.2e"
                 )
             r_sheet = st.number_input("r_sheet", min_value=0.0, value=0.000492, format="%.6f")
-            default_scheme = "central" if surface_type == "plane_cart" else "forward"
+            if surface_type == "disk_polar":
+                default_scheme = "edge"
+            elif surface_type == "plane_cart":
+                default_scheme = "central"
+            else:
+                default_scheme = "forward"
+            grad_scheme_options = ["forward", "central", "edge"]
             grad_scheme = st.selectbox(
                 "gradient_scheme",
-                options=["forward", "central", "edge"],
-                index=0 if default_scheme == "forward" else 1,
+                options=grad_scheme_options,
+                index=grad_scheme_options.index(default_scheme),
             )
             emdm_mode = st.selectbox("emdm_mode", ["shared", "concat"], index=0)
 
