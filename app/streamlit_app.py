@@ -145,7 +145,7 @@ def main() -> None:
     tab_conditions, tab_results, tab_eval = st.tabs(["条件", "結果", "コイル評価"])
 
     with tab_conditions:
-        run_clicked = False
+        run_solver_kind: str | None = None
         col_plot, col_params = st.columns([5, 1])
         with col_params:
             st.subheader("パラメータ")
@@ -295,9 +295,38 @@ def main() -> None:
             )
             emdm_mode = st.selectbox("emdm_mode", ["shared", "concat"], index=0)
 
-            st.markdown("### Solver")
+            st.markdown("### Solver (SOCP)")
             max_iter = st.number_input("max_iter", min_value=1, value=100, step=1)
             solver_verbose = st.checkbox("verbose", value=True)
+
+            st.markdown("### Solver (Tikhonov)")
+            tikh_lambda_reg = st.number_input(
+                "lambda_reg", min_value=0.0, value=1.0e-2, format="%.3e"
+            )
+            tikh_reg_operator = st.selectbox(
+                "reg_operator",
+                options=["grad", "identity", "power"],
+                index=0,
+            )
+            tikh_gradient_rows_reg = st.selectbox(
+                "gradient_rows_reg",
+                options=["interior", "active"],
+                index=0,
+            )
+            tikh_r_sheet = st.number_input(
+                "tikhonov_r_sheet",
+                min_value=0.0,
+                value=float(r_sheet),
+                format="%.6f",
+            )
+            tikh_cg_tol = st.number_input("cg_tol", min_value=0.0, value=1.0e-10, format="%.1e")
+            tikh_cg_maxiter = int(st.number_input("cg_maxiter", min_value=1, value=2000, step=1))
+            tikh_emdm_mode = st.selectbox("tikhonov_emdm_mode", ["shared", "concat"], index=0)
+
+            st.markdown("### Solver (TSVD)")
+            tsvd_k = int(st.number_input("k", min_value=1, value=10, step=1))
+            tsvd_svd_method = st.selectbox("svd_method", options=["full", "svds"], index=0)
+            tsvd_emdm_mode = st.selectbox("tsvd_emdm_mode", ["shared", "concat"], index=0)
 
             st.markdown("### 可視化")
             normal_scale = st.number_input("normal_scale", min_value=0.0, value=0.02, format="%.4f")
@@ -340,12 +369,35 @@ def main() -> None:
                 "emdm_mode": emdm_mode,
                 "max_iter": max_iter,
                 "solver_verbose": solver_verbose,
+                "tikhonov": {
+                    "lambda_reg": tikh_lambda_reg,
+                    "reg_operator": tikh_reg_operator,
+                    "gradient_rows_reg": tikh_gradient_rows_reg,
+                    "r_sheet": tikh_r_sheet,
+                    "cg_tol": tikh_cg_tol,
+                    "cg_maxiter": tikh_cg_maxiter,
+                    "emdm_mode": tikh_emdm_mode,
+                },
+                "tsvd": {
+                    "k": tsvd_k,
+                    "svd_method": tsvd_svd_method,
+                    "emdm_mode": tsvd_emdm_mode,
+                },
                 "normal_scale": normal_scale,
             }
             st.json(summary)
 
             st.markdown("### Run Optimization")
-            run_clicked = st.button("Run Optimization")
+            col_run_socp, col_run_tikh, col_run_tsvd = st.columns(3)
+            with col_run_socp:
+                if st.button("Run SOCP", use_container_width=True):
+                    run_solver_kind = "socp"
+            with col_run_tikh:
+                if st.button("Run Tikhonov", use_container_width=True):
+                    run_solver_kind = "tikhonov"
+            with col_run_tsvd:
+                if st.button("Run TSVD", use_container_width=True):
+                    run_solver_kind = "tsvd"
 
         with col_plot:
             st.subheader("3D 可視化")
@@ -481,7 +533,7 @@ def main() -> None:
             except Exception as exc:
                 st.error(f"可視化に失敗しました: {exc}")
 
-        if run_clicked:
+        if run_solver_kind is not None:
             status_box = st.empty()
 
             def _progress(stage: str, info: str) -> None:
@@ -493,11 +545,12 @@ def main() -> None:
 
             gap = 2.0 * float(params.get("z_offset", 0.0)) if params.get("use_two_planes") else 0.0
             J_max = float(delta_s / pitch_min) if (use_pitch and pitch_min > 0.0) else 0.0
-            if use_tgv and (alpha1_tgv <= 0.0 or alpha0_tgv <= 0.0):
+            if run_solver_kind == "socp" and use_tgv and (alpha1_tgv <= 0.0 or alpha0_tgv <= 0.0):
                 st.error("TGV requires alpha1_tgv > 0 and alpha0_tgv > 0.")
                 return
             config = {
                 "out_dir": str(ROOT / "runs"),
+                "solver_kind": run_solver_kind,
                 "surface_type": surface_type,
                 "surface_params": params,
                 "use_two_planes": bool(params.get("use_two_planes")),
@@ -547,8 +600,27 @@ def main() -> None:
                     "max_iter": int(max_iter),
                     "time_limit": None,
                 },
+                "tikhonov": {
+                    "lambda_reg": float(tikh_lambda_reg),
+                    "reg_operator": tikh_reg_operator,
+                    "gradient_rows_reg": tikh_gradient_rows_reg,
+                    "r_sheet": float(tikh_r_sheet),
+                    "cg_tol": float(tikh_cg_tol),
+                    "cg_maxiter": int(tikh_cg_maxiter),
+                    "emdm_mode": tikh_emdm_mode,
+                },
+                "tsvd": {
+                    "k": int(tsvd_k),
+                    "svd_method": tsvd_svd_method,
+                    "emdm_mode": tsvd_emdm_mode,
+                },
             }
-            with st.spinner("Running optimization..."):
+            spinner_text = {
+                "socp": "Running SOCP optimization...",
+                "tikhonov": "Running Tikhonov optimization...",
+                "tsvd": "Running TSVD optimization...",
+            }.get(run_solver_kind, "Running optimization...")
+            with st.spinner(spinner_text):
                 try:
                     run_dir, summary_out = run_optimization_pipeline(config, progress_cb=_progress)
                     st.success(f"Saved: {run_dir}")
@@ -812,7 +884,7 @@ def main() -> None:
                 z_by_surface = infer_surface_z_positions(cfg, loops)
                 delta_s = meta.get("delta_s") or 1.0
 
-                col_ctrl, col_plot = st.columns([1, 3])
+                col_ctrl, col_plot = st.columns([1, 4])
                 with col_ctrl:
                     st.markdown("### 入力")
                     st.caption(f"NPZ: {contour_path.name}")
@@ -993,7 +1065,7 @@ def main() -> None:
                                 zaxis_title="z / Bz",
                                 aspectmode="data",
                             ),
-                            height=700,
+                            height=920,
                         )
                         st.plotly_chart(fig, use_container_width=True)
 
@@ -1022,7 +1094,7 @@ def main() -> None:
                                 zaxis_title="z",
                                 aspectmode="data",
                             ),
-                            height=700,
+                            height=920,
                         )
                         st.plotly_chart(fig, use_container_width=True)
 

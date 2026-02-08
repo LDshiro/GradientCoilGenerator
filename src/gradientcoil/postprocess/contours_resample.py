@@ -271,6 +271,38 @@ def make_levels_from_delta_s(
     return levels
 
 
+def _iter_contour_paths(
+    contour_set: Any, levels: np.ndarray
+) -> list[tuple[float, list[mpath.Path]]]:
+    """Return contour paths across matplotlib API variants.
+
+    Older matplotlib exposes ``collections``; newer versions may only expose
+    ``allsegs``. This helper normalizes both into path lists.
+    """
+    contour_levels = np.asarray(getattr(contour_set, "levels", levels), float)
+
+    if hasattr(contour_set, "collections"):
+        out: list[tuple[float, list[mpath.Path]]] = []
+        for level, coll in zip(contour_levels, contour_set.collections, strict=False):
+            out.append((float(level), list(coll.get_paths())))
+        return out
+
+    allsegs = getattr(contour_set, "allsegs", None)
+    if allsegs is None:
+        raise AttributeError("ContourSet has neither 'collections' nor 'allsegs'.")
+
+    out = []
+    for level, segs in zip(contour_levels, allsegs, strict=False):
+        paths: list[mpath.Path] = []
+        for seg in segs:
+            verts = np.asarray(seg, float)
+            if verts.ndim != 2 or verts.shape[1] != 2 or verts.shape[0] < 2:
+                continue
+            paths.append(mpath.Path(verts))
+        out.append((float(level), paths))
+    return out
+
+
 def grid_contour_loops(
     X: np.ndarray,
     Y: np.ndarray,
@@ -281,11 +313,12 @@ def grid_contour_loops(
 ) -> list[tuple[float, list[np.ndarray]]]:
     fig = plt.figure()
     cs = plt.contour(X, Y, Z, levels=levels)
+    path_groups = _iter_contour_paths(cs, levels)
     plt.close(fig)
     out: list[tuple[float, list[np.ndarray]]] = []
-    for level, coll in zip(levels, cs.collections, strict=False):
+    for level, paths in path_groups:
         level_loops: list[np.ndarray] = []
-        for path in coll.get_paths():
+        for path in paths:
             level_loops.extend(
                 split_path_to_closed_loops(
                     path,
@@ -336,11 +369,12 @@ def tricontour_loops(
 ) -> list[tuple[float, list[np.ndarray]]]:
     fig = plt.figure()
     cs = plt.tricontour(tri, Zvals, levels=levels)
+    path_groups = _iter_contour_paths(cs, levels)
     plt.close(fig)
     out: list[tuple[float, list[np.ndarray]]] = []
-    for level, coll in zip(levels, cs.collections, strict=False):
+    for level, paths in path_groups:
         level_loops: list[np.ndarray] = []
-        for path in coll.get_paths():
+        for path in paths:
             level_loops.extend(
                 split_path_to_closed_loops(
                     path,

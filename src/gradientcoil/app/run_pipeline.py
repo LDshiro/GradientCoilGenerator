@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 
 from gradientcoil.optimize.socp_bz import SocpBzSpec, solve_socp_bz
+from gradientcoil.optimize.tikhonov_bz import TikhonovBzSpec, solve_tikhonov_bz
+from gradientcoil.optimize.tsvd_bz import TsvdBzSpec, solve_tsvd_bz
 from gradientcoil.physics.roi_sampling import (
     hammersley_sphere,
     sample_sphere_fibonacci,
@@ -159,61 +161,111 @@ def run_optimization_pipeline(
     bz_target = target_source.evaluate(roi_points)
     config["target_resolved"] = target_source.to_dict()
 
-    _progress(progress_cb, "solve", "running SOCP solver")
-    default_scheme = "central" if config["surface_type"] == "plane_cart" else "forward"
-    base_scheme = config["spec"].get("grad_scheme", default_scheme)
-    scheme_pitch = config["spec"].get("gradient_scheme_pitch", base_scheme)
-    scheme_tv = config["spec"].get("gradient_scheme_tv", base_scheme)
-    scheme_power = config["spec"].get("gradient_scheme_power", base_scheme)
-    scheme_tgv = config["spec"].get("gradient_scheme_tgv", base_scheme)
+    solver_kind = str(config.get("solver_kind", "socp")).lower()
+    if solver_kind == "socp":
+        _progress(progress_cb, "solve", "running SOCP solver")
+        default_scheme = "central" if config["surface_type"] == "plane_cart" else "forward"
+        base_scheme = config["spec"].get("grad_scheme", default_scheme)
+        scheme_pitch = config["spec"].get("gradient_scheme_pitch", base_scheme)
+        scheme_tv = config["spec"].get("gradient_scheme_tv", base_scheme)
+        scheme_power = config["spec"].get("gradient_scheme_power", base_scheme)
+        scheme_tgv = config["spec"].get("gradient_scheme_tgv", base_scheme)
 
-    spec = SocpBzSpec(
-        use_tv=config["spec"]["use_tv"],
-        lambda_tv=float(config["spec"]["lambda_tv"]),
-        use_pitch=config["spec"]["use_pitch"],
-        J_max=float(config["spec"]["J_max"]),
-        use_power=config["spec"]["use_power"],
-        lambda_pwr=float(config["spec"]["lambda_pwr"]),
-        r_sheet=float(config["spec"]["r_sheet"]),
-        use_tgv=config["spec"].get("use_tgv", False),
-        alpha1_tgv=float(config["spec"].get("alpha1_tgv", 1e-6)),
-        alpha0_tgv=float(config["spec"].get("alpha0_tgv", 1e-6)),
-        tgv_area_weights=bool(config["spec"].get("tgv_area_weights", True)),
-        gradient_rows_tgv=str(config["spec"].get("gradient_rows_tgv", "interior")),
-        gradient_scheme_tgv=scheme_tgv,
-        use_curv_r1=bool(config["spec"].get("use_curv_r1", False)),
-        lambda_curv_r1=float(config["spec"].get("lambda_curv_r1", 0.0)),
-        use_curv_en=bool(config["spec"].get("use_curv_en", False)),
-        lambda_curv_en=float(config["spec"].get("lambda_curv_en", 0.0)),
-        gradient_scheme_curv=str(config["spec"].get("gradient_scheme_curv", base_scheme)),
-        gradient_scheme_pitch=scheme_pitch,
-        gradient_scheme_tv=scheme_tv,
-        gradient_scheme_power=scheme_power,
-        emdm_mode=config["spec"]["emdm_mode"],
-        verbose=config["solver"]["verbose"],
-        max_iter=config["solver"]["max_iter"],
-        time_limit=config["solver"]["time_limit"],
-    )
-
-    result = solve_socp_bz(
-        roi_points,
-        bz_target,
-        surfaces,
-        spec,
-        roi_weights=roi_weights,
-        cache_dir=config.get("cache_dir"),
-    )
+        spec = SocpBzSpec(
+            use_tv=config["spec"]["use_tv"],
+            lambda_tv=float(config["spec"]["lambda_tv"]),
+            use_pitch=config["spec"]["use_pitch"],
+            J_max=float(config["spec"]["J_max"]),
+            use_power=config["spec"]["use_power"],
+            lambda_pwr=float(config["spec"]["lambda_pwr"]),
+            r_sheet=float(config["spec"]["r_sheet"]),
+            use_tgv=config["spec"].get("use_tgv", False),
+            alpha1_tgv=float(config["spec"].get("alpha1_tgv", 1e-6)),
+            alpha0_tgv=float(config["spec"].get("alpha0_tgv", 1e-6)),
+            tgv_area_weights=bool(config["spec"].get("tgv_area_weights", True)),
+            gradient_rows_tgv=str(config["spec"].get("gradient_rows_tgv", "interior")),
+            gradient_scheme_tgv=scheme_tgv,
+            use_curv_r1=bool(config["spec"].get("use_curv_r1", False)),
+            lambda_curv_r1=float(config["spec"].get("lambda_curv_r1", 0.0)),
+            use_curv_en=bool(config["spec"].get("use_curv_en", False)),
+            lambda_curv_en=float(config["spec"].get("lambda_curv_en", 0.0)),
+            gradient_scheme_curv=str(config["spec"].get("gradient_scheme_curv", base_scheme)),
+            gradient_scheme_pitch=scheme_pitch,
+            gradient_scheme_tv=scheme_tv,
+            gradient_scheme_power=scheme_power,
+            emdm_mode=config["spec"]["emdm_mode"],
+            verbose=config["solver"]["verbose"],
+            max_iter=config["solver"]["max_iter"],
+            time_limit=config["solver"]["time_limit"],
+        )
+        result = solve_socp_bz(
+            roi_points,
+            bz_target,
+            surfaces,
+            spec,
+            roi_weights=roi_weights,
+            cache_dir=config.get("cache_dir"),
+        )
+        method = "socp"
+    elif solver_kind == "tikhonov":
+        _progress(progress_cb, "solve", "running Tikhonov solver")
+        cfg_tikhonov = config.get("tikhonov", {})
+        shared_mode = config.get("spec", {}).get("emdm_mode", "shared")
+        spec = TikhonovBzSpec(
+            lambda_reg=float(cfg_tikhonov.get("lambda_reg", 1.0e-2)),
+            reg_operator=str(cfg_tikhonov.get("reg_operator", "grad")),
+            r_sheet=float(cfg_tikhonov.get("r_sheet", config.get("spec", {}).get("r_sheet", 1.0))),
+            gradient_rows_reg=str(cfg_tikhonov.get("gradient_rows_reg", "interior")),
+            emdm_mode=str(cfg_tikhonov.get("emdm_mode", shared_mode)),
+            cg_tol=float(cfg_tikhonov.get("cg_tol", 1.0e-10)),
+            cg_maxiter=int(cfg_tikhonov.get("cg_maxiter", 2000)),
+        )
+        result = solve_tikhonov_bz(
+            roi_points,
+            bz_target,
+            surfaces,
+            spec,
+            roi_weights=roi_weights,
+            cache_dir=config.get("cache_dir"),
+        )
+        method = "tikhonov"
+    elif solver_kind == "tsvd":
+        _progress(progress_cb, "solve", "running TSVD solver")
+        cfg_tsvd = config.get("tsvd", {})
+        shared_mode = config.get("spec", {}).get("emdm_mode", "shared")
+        spec = TsvdBzSpec(
+            k=int(cfg_tsvd.get("k", 5)),
+            svd_method=str(cfg_tsvd.get("svd_method", "full")),
+            emdm_mode=str(cfg_tsvd.get("emdm_mode", shared_mode)),
+        )
+        result = solve_tsvd_bz(
+            roi_points,
+            bz_target,
+            surfaces,
+            spec,
+            roi_weights=roi_weights,
+            cache_dir=config.get("cache_dir"),
+        )
+        method = "tsvd"
+    else:
+        raise ValueError(f"Unsupported solver_kind: {solver_kind}")
 
     _progress(progress_cb, "save", "saving run bundle")
-    run_dir = create_run_dir(Path(config["out_dir"]), prefix="opt", config=config)
+    run_dir = create_run_dir(Path(config["out_dir"]), prefix=method, config=config)
     npz_payload: dict[str, object] = {
         "roi_points_used": roi_points,
         "roi_weights_used": roi_weights,
+        "roi_points": roi_points,
+        "roi_weights": roi_weights,
         "bz_target": bz_target,
         "config_json": json.dumps(config, ensure_ascii=False),
         "solver_stats_json": json.dumps(result.solver_stats, ensure_ascii=False),
         "status": result.status,
+        "method": method,
+        "s_opt": result.s_opt,
     }
+    if result.objective is not None:
+        npz_payload["objective"] = float(result.objective)
     for idx, (surface, S_grid) in enumerate(zip(surfaces, result.S_grids, strict=True)):
         npz_payload[f"S_grid_{idx}"] = S_grid
         npz_payload[f"X_plot_{idx}"] = surface.X_plot
@@ -223,16 +275,23 @@ def run_optimization_pipeline(
         npz_payload["X_plot"] = surfaces[0].X_plot
         npz_payload["Y_plot"] = surfaces[0].Y_plot
 
-    log_text = f"status={result.status}\nobjective={result.objective}\n"
+    solver_payload = {
+        "method": method,
+        "status": result.status,
+        "objective": result.objective,
+        **dict(result.solver_stats),
+    }
+    log_text = f"method={method}\nstatus={result.status}\nobjective={result.objective}\n"
     save_run_bundle(
         run_dir,
         npz_payload=npz_payload,
         config=config,
-        solver=result.solver_stats,
+        solver=solver_payload,
         log_text=log_text,
     )
 
     summary = {
+        "method": method,
         "status": result.status,
         "objective": result.objective,
         "run_dir": str(run_dir),

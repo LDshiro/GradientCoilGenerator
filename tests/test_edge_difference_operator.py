@@ -63,3 +63,15 @@ def test_edge_difference_operator_bounds_and_periodic_seam() -> None:
     plane = build_surfaces()[1]
     op_plane = build_edge_difference_operator(plane)
     assert np.any(op_plane.k1 < 0)
+
+
+def test_edge_difference_operator_rows_active_includes_boundary_rows_plane_cart() -> None:
+    plane = build_plane_cart_surface(
+        PlaneCartSurfaceConfig(PLANE_HALF=0.2, NX=12, NY=10, R_AP=0.15)
+    )
+    op_interior = build_edge_difference_operator(plane, rows="interior", bidirectional=True)
+    op_active = build_edge_difference_operator(plane, rows="active", bidirectional=True)
+
+    assert op_active.D.shape[0] > op_interior.D.shape[0]
+    start_on_boundary = plane.boundary_mask[op_active.uv0[:, 0], op_active.uv0[:, 1]]
+    assert np.any(start_on_boundary)

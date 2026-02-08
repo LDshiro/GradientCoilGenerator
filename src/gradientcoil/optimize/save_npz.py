@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from gradientcoil.optimize.socp_bz import SocpBzResult
+from gradientcoil.surfaces.base import SurfaceGrid
 from gradientcoil.targets.target_bz_source import TargetBzSource
 
 
@@ -73,6 +74,53 @@ def save_socp_bz_npz(
             data["scale_policy"] = _json_array(str(target_source.scale_policy))
         if hasattr(target_source, "max_order"):
             data["max_order"] = np.asarray(int(target_source.max_order), dtype=int)
+
+    np.savez(save_path, **data)
+    return save_path
+
+
+def save_linear_bz_npz(
+    path: Path | str,
+    *,
+    result_status: str,
+    objective: float,
+    s_opt: np.ndarray,
+    S_grids: list[np.ndarray],
+    surfaces: list[SurfaceGrid],
+    roi_points: np.ndarray,
+    roi_weights: np.ndarray,
+    bz_target: np.ndarray,
+    config: dict,
+    solver_stats: dict,
+    method: str,
+    extra: dict[str, np.ndarray] | None = None,
+) -> Path:
+    save_path = Path(path)
+    data: dict[str, np.ndarray] = {
+        "status": _json_array(str(result_status)),
+        "objective": np.asarray(float(objective), dtype=float),
+        "method": _json_array(str(method)),
+        "s_opt": np.asarray(s_opt, dtype=float),
+        "roi_points": np.asarray(roi_points, dtype=float),
+        "roi_weights": np.asarray(roi_weights, dtype=float),
+        "bz_target": np.asarray(bz_target, dtype=float),
+        "config_json": _json_array(json.dumps(config, ensure_ascii=False, indent=2)),
+        "solver_stats_json": _json_array(json.dumps(solver_stats, ensure_ascii=False, indent=2)),
+    }
+
+    for idx, (surface, S_grid) in enumerate(zip(surfaces, S_grids, strict=True)):
+        data[f"S_grid_{idx}"] = np.asarray(S_grid, dtype=float)
+        data[f"X_plot_{idx}"] = np.asarray(surface.X_plot, dtype=float)
+        data[f"Y_plot_{idx}"] = np.asarray(surface.Y_plot, dtype=float)
+
+    if len(surfaces) == 1 and len(S_grids) == 1:
+        data["S_grid"] = np.asarray(S_grids[0], dtype=float)
+        data["X_plot"] = np.asarray(surfaces[0].X_plot, dtype=float)
+        data["Y_plot"] = np.asarray(surfaces[0].Y_plot, dtype=float)
+
+    if extra:
+        for key, value in extra.items():
+            data[key] = np.asarray(value)
 
     np.savez(save_path, **data)
     return save_path

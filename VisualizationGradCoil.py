@@ -73,7 +73,7 @@ def split_path_to_loops(path_obj):
         loops.append(W)
     else:
         cur = []
-        for v, code in zip(V, C):
+        for v, code in zip(V, C, strict=False):
             if code == mpath.Path.MOVETO:
                 if len(cur) > 0:
                     if not np.allclose(cur[0], cur[-1]):
@@ -115,7 +115,7 @@ def grid_contour_loops(X, Y, Z, levels):
     cs = plt.contour(X, Y, Z, levels=levels)
     plt.close(fig)
     out = []
-    for lev, coll in zip(levels, cs.collections):
+    for lev, coll in zip(levels, cs.collections, strict=False):
         level_loops = []
         for pth in coll.get_paths():
             level_loops.extend(split_path_to_loops(pth))
