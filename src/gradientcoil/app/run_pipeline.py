@@ -14,6 +14,7 @@ from gradientcoil.physics.roi_sampling import (
     sample_sphere_fibonacci,
     symmetrize_points,
 )
+from gradientcoil.post.error_metrics import compute_bz_error_dataset
 from gradientcoil.runs.run_bundle import create_run_dir, save_run_bundle
 from gradientcoil.surfaces.cylinder_unwrap import (
     CylinderUnwrapSurfaceConfig,
@@ -160,6 +161,12 @@ def run_optimization_pipeline(
         target_source = target_source_from_dict(tgt_cfg)
     bz_target = target_source.evaluate(roi_points)
     config["target_resolved"] = target_source.to_dict()
+    analysis_cfg = config.setdefault("analysis", {})
+    analysis_cfg.setdefault("error_metric", "abs")
+    analysis_cfg.setdefault("hist_bins", 50)
+    analysis_cfg.setdefault("zero_threshold_factor", 1e-9)
+    analysis_cfg.setdefault("hist_weight_mode", "weighted_and_unweighted")
+    analysis_cfg.setdefault("zero_target_policy", "exclude_for_hist")
 
     solver_kind = str(config.get("solver_kind", "socp")).lower()
     if solver_kind == "socp":
@@ -189,6 +196,7 @@ def run_optimization_pipeline(
             lambda_curv_r1=float(config["spec"].get("lambda_curv_r1", 0.0)),
             use_curv_en=bool(config["spec"].get("use_curv_en", False)),
             lambda_curv_en=float(config["spec"].get("lambda_curv_en", 0.0)),
+            curv_area_weights=bool(config["spec"].get("curv_area_weights", True)),
             gradient_scheme_curv=str(config["spec"].get("gradient_scheme_curv", base_scheme)),
             gradient_scheme_pitch=scheme_pitch,
             gradient_scheme_tv=scheme_tv,
@@ -207,6 +215,7 @@ def run_optimization_pipeline(
             cache_dir=config.get("cache_dir"),
         )
         method = "socp"
+        emdm_mode_used = spec.emdm_mode
     elif solver_kind == "tikhonov":
         _progress(progress_cb, "solve", "running Tikhonov solver")
         cfg_tikhonov = config.get("tikhonov", {})
@@ -229,6 +238,7 @@ def run_optimization_pipeline(
             cache_dir=config.get("cache_dir"),
         )
         method = "tikhonov"
+        emdm_mode_used = spec.emdm_mode
     elif solver_kind == "tsvd":
         _progress(progress_cb, "solve", "running TSVD solver")
         cfg_tsvd = config.get("tsvd", {})
@@ -247,8 +257,22 @@ def run_optimization_pipeline(
             cache_dir=config.get("cache_dir"),
         )
         method = "tsvd"
+        emdm_mode_used = spec.emdm_mode
     else:
         raise ValueError(f"Unsupported solver_kind: {solver_kind}")
+
+    _progress(progress_cb, "analyze", "computing ROI error dataset")
+    error_dataset = compute_bz_error_dataset(
+        roi_points,
+        bz_target,
+        result.s_opt,
+        surfaces,
+        emdm_mode_used,
+        roi_weights=roi_weights,
+        cache_dir=config.get("cache_dir"),
+        hist_bins=int(analysis_cfg["hist_bins"]),
+        zero_threshold_factor=float(analysis_cfg["zero_threshold_factor"]),
+    )
 
     _progress(progress_cb, "save", "saving run bundle")
     run_dir = create_run_dir(Path(config["out_dir"]), prefix=method, config=config)
@@ -264,6 +288,7 @@ def run_optimization_pipeline(
         "method": method,
         "s_opt": result.s_opt,
     }
+    npz_payload.update(error_dataset.to_npz_payload())
     if result.objective is not None:
         npz_payload["objective"] = float(result.objective)
     for idx, (surface, S_grid) in enumerate(zip(surfaces, result.S_grids, strict=True)):
@@ -294,6 +319,11 @@ def run_optimization_pipeline(
         "method": method,
         "status": result.status,
         "objective": result.objective,
+        "error_abs_mean": float(error_dataset.bz_error_mean),
+        "error_abs_p95": float(error_dataset.bz_error_p95),
+        "error_abs_max": float(error_dataset.bz_error_max),
+        "error_abs_valid_count": int(error_dataset.bz_error_valid_count),
+        "error_abs_total_count": int(error_dataset.bz_error_total_count),
         "run_dir": str(run_dir),
     }
     return run_dir, summary

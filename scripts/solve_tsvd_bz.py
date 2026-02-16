@@ -12,6 +12,7 @@ from gradientcoil.physics.roi_sampling import (
     sample_sphere_fibonacci,
     symmetrize_points,
 )
+from gradientcoil.post.error_metrics import compute_bz_error_dataset
 from gradientcoil.surfaces.cylinder_unwrap import (
     CylinderUnwrapSurfaceConfig,
     build_cylinder_unwrap_surface,
@@ -202,6 +203,17 @@ def main(argv: list[str] | None = None) -> int:
         roi_weights=roi_weights,
         cache_dir=args.cache_dir,
     )
+    error_dataset = compute_bz_error_dataset(
+        roi_points,
+        bz_target,
+        result.s_opt,
+        surfaces,
+        spec.emdm_mode,
+        roi_weights=roi_weights,
+        cache_dir=args.cache_dir,
+        hist_bins=50,
+        zero_threshold_factor=1e-9,
+    )
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -226,6 +238,13 @@ def main(argv: list[str] | None = None) -> int:
         "k": int(args.k),
         "svd_method": args.svd_method,
         "emdm_mode": args.emdm_mode,
+        "analysis": {
+            "error_metric": "abs",
+            "hist_bins": 50,
+            "zero_threshold_factor": 1e-9,
+            "hist_weight_mode": "weighted_and_unweighted",
+            "zero_target_policy": "exclude_for_hist",
+        },
     }
     save_linear_bz_npz(
         out_path,
@@ -240,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
         config=config,
         solver_stats=result.solver_stats,
         method="tsvd",
+        extra=error_dataset.to_npz_payload(),
     )
     print(f"Saved: {out_path}")
     return 0

@@ -280,6 +280,7 @@ def main() -> None:
                 lambda_curv_en = st.number_input(
                     "lambda_curv_en", min_value=0.0, value=0.0, format="%.2e"
                 )
+                curv_area_weights = st.checkbox("curv_area_weights", value=True)
             r_sheet = st.number_input("r_sheet", min_value=0.0, value=0.000492, format="%.6f")
             if surface_type == "disk_polar":
                 default_scheme = "edge"
@@ -362,6 +363,7 @@ def main() -> None:
                 "lambda_curv_r1": lambda_curv_r1,
                 "use_curv_en": use_curv_en,
                 "lambda_curv_en": lambda_curv_en,
+                "curv_area_weights": curv_area_weights,
                 "r_sheet": r_sheet,
                 "gradient_scheme": grad_scheme,
                 "gradient_scheme_curv": grad_scheme,
@@ -502,6 +504,7 @@ def main() -> None:
                         lambda_curv_r1=float(lambda_curv_r1),
                         use_curv_en=bool(use_curv_en),
                         lambda_curv_en=float(lambda_curv_en),
+                        curv_area_weights=bool(curv_area_weights),
                         gradient_scheme_curv=grad_scheme,
                         gradient_scheme_tgv=grad_scheme,
                         gradient_scheme_pitch=grad_scheme,
@@ -586,6 +589,7 @@ def main() -> None:
                     "lambda_curv_r1": float(lambda_curv_r1),
                     "use_curv_en": bool(use_curv_en),
                     "lambda_curv_en": float(lambda_curv_en),
+                    "curv_area_weights": bool(curv_area_weights),
                     "r_sheet": float(r_sheet),
                     "grad_scheme": grad_scheme,
                     "gradient_scheme_curv": grad_scheme,
@@ -650,6 +654,44 @@ def main() -> None:
 
             with load_run_npz(entry) as npz:
                 fields = extract_contour_fields(npz)
+                error_data: dict[str, np.ndarray] | None = None
+                error_required = {
+                    "bz_error_abs",
+                    "bz_error_hist_edges",
+                    "bz_error_hist_counts_weighted",
+                    "bz_error_hist_counts_unweighted",
+                }
+                if error_required.issubset(set(npz.files)):
+
+                    def _npz_scalar(key: str, default: float) -> float:
+                        if key not in npz:
+                            return default
+                        raw = np.asarray(npz[key], dtype=float).reshape(-1)
+                        if raw.size == 0:
+                            return default
+                        return float(raw[0])
+
+                    error_data = {
+                        "error_abs": np.asarray(npz["bz_error_abs"], dtype=float).reshape(-1),
+                        "hist_edges": np.asarray(npz["bz_error_hist_edges"], dtype=float).reshape(
+                            -1
+                        ),
+                        "hist_weighted": np.asarray(
+                            npz["bz_error_hist_counts_weighted"], dtype=float
+                        ).reshape(-1),
+                        "hist_unweighted": np.asarray(
+                            npz["bz_error_hist_counts_unweighted"], dtype=float
+                        ).reshape(-1),
+                        "valid_count": _npz_scalar("bz_error_valid_count", 0.0),
+                        "total_count": _npz_scalar("bz_error_total_count", 0.0),
+                        "tau": _npz_scalar("bz_error_tau", 0.0),
+                        "mean": _npz_scalar("bz_error_mean", 0.0),
+                        "p95": _npz_scalar("bz_error_p95", 0.0),
+                        "max": _npz_scalar("bz_error_max", 0.0),
+                        "mean_weighted": _npz_scalar("bz_error_weighted_mean", 0.0),
+                        "p95_weighted": _npz_scalar("bz_error_weighted_p95", 0.0),
+                        "max_weighted": _npz_scalar("bz_error_weighted_max", 0.0),
+                    }
 
             st.caption(f"path: {entry.path}")
             if config:
@@ -658,6 +700,63 @@ def main() -> None:
             if solver:
                 with st.expander("solver.json", expanded=False):
                     st.json(solver)
+
+            st.subheader("ROI 誤差ヒストグラム")
+            if error_data is None:
+                st.info("この run には誤差データが保存されていません。")
+            else:
+                import matplotlib.pyplot as plt
+
+                edges = error_data["hist_edges"]
+                counts_unweighted = error_data["hist_unweighted"]
+                counts_weighted = error_data["hist_weighted"]
+                if edges.size >= 2 and counts_unweighted.size == edges.size - 1:
+                    centers = 0.5 * (edges[:-1] + edges[1:])
+                    widths = np.diff(edges)
+                    fig_hist, ax_hist = plt.subplots(figsize=(6.4, 4.2), dpi=220)
+                    ax_hist.bar(
+                        centers,
+                        counts_unweighted,
+                        width=widths,
+                        alpha=0.45,
+                        color="tab:blue",
+                        label="非加重",
+                        edgecolor="black",
+                        linewidth=0.3,
+                    )
+                    ax_hist.plot(
+                        centers,
+                        counts_weighted,
+                        color="tab:red",
+                        linewidth=1.8,
+                        marker="o",
+                        markersize=2.5,
+                        label="加重",
+                    )
+                    ax_hist.set_xlabel("|B_pred - B_target|")
+                    ax_hist.set_ylabel("Count")
+                    ax_hist.grid(True, alpha=0.25)
+                    ax_hist.legend(loc="best")
+                    st.pyplot(fig_hist)
+                    plt.close(fig_hist)
+                else:
+                    st.warning("ヒストグラムの保存データ形状が不正です。")
+
+                stat_col1, stat_col2, stat_col3 = st.columns(3)
+                with stat_col1:
+                    st.metric("mean (非加重)", f"{error_data['mean']:.3e}")
+                    st.metric("mean (加重)", f"{error_data['mean_weighted']:.3e}")
+                with stat_col2:
+                    st.metric("p95 (非加重)", f"{error_data['p95']:.3e}")
+                    st.metric("p95 (加重)", f"{error_data['p95_weighted']:.3e}")
+                with stat_col3:
+                    st.metric("max (非加重)", f"{error_data['max']:.3e}")
+                    st.metric("max (加重)", f"{error_data['max_weighted']:.3e}")
+                st.caption(
+                    "valid / total: "
+                    f"{int(error_data['valid_count'])} / {int(error_data['total_count'])}, "
+                    f"tau={error_data['tau']:.3e}"
+                )
 
             if not fields:
                 st.warning("可視化できるデータが見つかりません。")

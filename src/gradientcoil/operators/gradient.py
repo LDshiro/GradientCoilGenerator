@@ -157,7 +157,10 @@ def build_edge_difference_operator(
         raise ValueError("rows must be 'interior' or 'active'.")
 
     Nu, Nv = surface.grid_shape
-    coords_int = surface.coords_int
+    if rows == "interior":
+        row_coords = surface.coords_int
+    else:
+        row_coords = np.argwhere(surface.interior_mask | surface.boundary_mask)
 
     rows_idx: list[int] = []
     cols_idx: list[int] = []
@@ -182,9 +185,10 @@ def build_edge_difference_operator(
         uv1: tuple[int, int],
     ) -> None:
         row = len(k0_list)
-        rows_idx.append(row)
-        cols_idx.append(k0)
-        data.append(-inv_h)
+        if k0 >= 0:
+            rows_idx.append(row)
+            cols_idx.append(k0)
+            data.append(-inv_h)
         if k1 >= 0:
             rows_idx.append(row)
             cols_idx.append(k1)
@@ -225,43 +229,35 @@ def build_edge_difference_operator(
 
     directions = ((1, 0, 0), (-1, 0, 0), (0, 1, 1), (0, -1, 1))
 
-    for iu, iv in coords_int:
+    for iu, iv in row_coords:
         k0 = int(surface.idx_map[iu, iv])
-        if k0 < 0:
-            continue
 
         for du, dv, edge_dir in directions:
             nb = neighbor_index(iu, iv, du, dv)
             if nb is None:
                 continue
             iu1, iv1 = nb
-            if surface.idx_map[iu1, iv1] >= 0:
-                if not bidirectional and (du < 0 or dv < 0):
-                    continue
-                k1 = int(surface.idx_map[iu1, iv1])
-                h = edge_scale(iu, iv, iu1, iv1, edge_dir)
-                edge_area = 0.5 * (surface.areas_uv[iu, iv] + surface.areas_uv[iu1, iv1])
-                add_edge(
-                    k0=k0,
-                    k1=k1,
-                    inv_h=1.0 / h,
-                    edge_area=edge_area,
-                    edge_dir=edge_dir,
-                    uv0=(iu, iv),
-                    uv1=(iu1, iv1),
-                )
-            elif surface.boundary_mask[iu1, iv1]:
-                h = edge_scale(iu, iv, iu1, iv1, edge_dir)
-                edge_area = 0.5 * (surface.areas_uv[iu, iv] + surface.areas_uv[iu1, iv1])
-                add_edge(
-                    k0=k0,
-                    k1=-1,
-                    inv_h=1.0 / h,
-                    edge_area=edge_area,
-                    edge_dir=edge_dir,
-                    uv0=(iu, iv),
-                    uv1=(iu1, iv1),
-                )
+            k1 = int(surface.idx_map[iu1, iv1])
+            if k1 < 0 and not surface.boundary_mask[iu1, iv1]:
+                continue
+            if k0 < 0 and k1 < 0:
+                continue
+            # For bidirectional=False, keep one orientation for interior-interior edges
+            # but retain interior-boundary edges on both negative/positive sides.
+            if not bidirectional and (du < 0 or dv < 0) and k1 >= 0:
+                continue
+
+            h = edge_scale(iu, iv, iu1, iv1, edge_dir)
+            edge_area = 0.5 * (surface.areas_uv[iu, iv] + surface.areas_uv[iu1, iv1])
+            add_edge(
+                k0=k0,
+                k1=k1,
+                inv_h=1.0 / h,
+                edge_area=edge_area,
+                edge_dir=edge_dir,
+                uv0=(iu, iv),
+                uv1=(iu1, iv1),
+            )
 
     D = coo_matrix((data, (rows_idx, cols_idx)), shape=(len(k0_list), surface.Nint)).tocsr()
     return EdgeDifferenceOperator(

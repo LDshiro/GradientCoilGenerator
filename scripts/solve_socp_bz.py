@@ -12,6 +12,7 @@ from gradientcoil.physics.roi_sampling import (
     sample_sphere_fibonacci,
     symmetrize_points,
 )
+from gradientcoil.post.error_metrics import compute_bz_error_dataset
 from gradientcoil.surfaces.cylinder_unwrap import (
     CylinderUnwrapSurfaceConfig,
     build_cylinder_unwrap_surface,
@@ -167,6 +168,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lambda-curv-r1", type=float, default=0.0)
     parser.add_argument("--use-curv-en", action="store_true")
     parser.add_argument("--lambda-curv-en", type=float, default=0.0)
+    curv_group = parser.add_mutually_exclusive_group()
+    curv_group.add_argument("--curv-area-weights", action="store_true", default=True)
+    curv_group.add_argument(
+        "--no-curv-area-weights", action="store_false", dest="curv_area_weights"
+    )
     parser.add_argument(
         "--grad-scheme",
         choices=["forward", "central", "edge"],
@@ -248,6 +254,7 @@ def main(argv: list[str] | None = None) -> int:
         lambda_curv_r1=float(args.lambda_curv_r1),
         use_curv_en=bool(args.use_curv_en),
         lambda_curv_en=float(args.lambda_curv_en),
+        curv_area_weights=bool(args.curv_area_weights),
         gradient_scheme_curv=grad_scheme_curv,
         gradient_scheme_tgv=grad_scheme_tgv,
         gradient_scheme_pitch=grad_scheme_pitch,
@@ -266,6 +273,17 @@ def main(argv: list[str] | None = None) -> int:
         spec,
         roi_weights=roi_weights,
         cache_dir=args.cache_dir,
+    )
+    error_dataset = compute_bz_error_dataset(
+        roi_points,
+        bz_target,
+        result.s_opt,
+        surfaces,
+        args.emdm_mode,
+        roi_weights=roi_weights,
+        cache_dir=args.cache_dir,
+        hist_bins=50,
+        zero_threshold_factor=1e-9,
     )
 
     out_dir = Path(args.out_dir)
@@ -303,6 +321,7 @@ def main(argv: list[str] | None = None) -> int:
         "lambda_curv_r1": float(args.lambda_curv_r1),
         "use_curv_en": bool(args.use_curv_en),
         "lambda_curv_en": float(args.lambda_curv_en),
+        "curv_area_weights": bool(args.curv_area_weights),
         "grad_scheme": args.grad_scheme,
         "gradient_scheme_curv": grad_scheme_curv,
         "gradient_scheme_tgv": grad_scheme_tgv,
@@ -312,6 +331,13 @@ def main(argv: list[str] | None = None) -> int:
         "solver": "CLARABEL",
         "max_iter": args.max_iter,
         "time_limit": args.time_limit,
+        "analysis": {
+            "error_metric": "abs",
+            "hist_bins": 50,
+            "zero_threshold_factor": 1e-9,
+            "hist_weight_mode": "weighted_and_unweighted",
+            "zero_target_policy": "exclude_for_hist",
+        },
     }
 
     save_socp_bz_npz(
@@ -323,6 +349,7 @@ def main(argv: list[str] | None = None) -> int:
         bz_target=bz_target,
         config=config,
         target_source=target_source,
+        extra=error_dataset.to_npz_payload(),
     )
 
     print(f"Saved: {out_path}")

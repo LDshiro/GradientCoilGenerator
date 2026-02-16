@@ -33,6 +33,7 @@ class SocpBzSpec:
     lambda_curv_r1: float = 0.0
     use_curv_en: bool = False
     lambda_curv_en: float = 0.0
+    curv_area_weights: bool = True
     gradient_scheme_curv: str = "forward"
     gradient_scheme_pitch: str = "forward"
     gradient_scheme_tv: str = "forward"
@@ -79,6 +80,18 @@ def _solver_stats_dict(stats: object | None) -> dict:
         elif isinstance(val, np.ndarray):
             out[name] = val.tolist()
     return out
+
+
+def _inverse_scaled_area_weights(areas: np.ndarray, *, eps: float = 1e-12) -> np.ndarray:
+    """Return inverse-scaled area weights: mean(area)/area."""
+    a = np.asarray(areas, dtype=float).reshape(-1)
+    if a.size == 0:
+        return a
+    a_safe = np.maximum(a, eps)
+    a_mean = float(np.mean(a_safe))
+    if not np.isfinite(a_mean) or a_mean <= 0.0:
+        raise ValueError("area weights require positive finite areas.")
+    return a_mean / a_safe
 
 
 def _build_gradient_block(
@@ -178,6 +191,36 @@ def _build_line_graph_operator(op) -> tuple[csr_matrix, np.ndarray]:
     return D_line, np.asarray(edge_area_list, dtype=float)
 
 
+def _build_edge_and_line_blocks(
+    surfaces: list[SurfaceGrid], *, emdm_mode: str, bidirectional: bool
+) -> tuple[csr_matrix, csr_matrix, np.ndarray]:
+    """Build first-order edge operator and second-order line-graph operator."""
+    ops = _build_edge_ops(
+        surfaces,
+        rows_mode="interior",
+        emdm_mode=emdm_mode,
+        bidirectional=bidirectional,
+    )
+    if emdm_mode == "shared":
+        D_edge = ops[0].D
+        D_line, areas_line = _build_line_graph_operator(ops[0])
+        return D_edge, D_line, areas_line
+
+    D_edge = block_diag([op.D for op in ops], format="csr")
+    line_blocks: list[csr_matrix] = []
+    area_blocks: list[np.ndarray] = []
+    for op in ops:
+        D_line_i, areas_line_i = _build_line_graph_operator(op)
+        line_blocks.append(D_line_i)
+        area_blocks.append(areas_line_i)
+    if line_blocks:
+        D_line = block_diag(line_blocks, format="csr")
+    else:
+        D_line = csr_matrix((0, D_edge.shape[0]))
+    areas_line = np.concatenate(area_blocks) if area_blocks else np.zeros((0,), dtype=float)
+    return D_edge, D_line, areas_line
+
+
 def estimate_socp_bz_problem_size(
     points: np.ndarray,
     surfaces: list[SurfaceGrid],
@@ -214,7 +257,7 @@ def estimate_socp_bz_problem_size(
                 surfaces,
                 rows_mode=rows_pitch,
                 emdm_mode=spec.emdm_mode,
-                bidirectional=True,
+                bidirectional=False,
             )
             constraints["pitch"] = 2 * int(D_pitch.shape[0])
         else:
@@ -236,7 +279,7 @@ def estimate_socp_bz_problem_size(
                 surfaces,
                 rows_mode=rows_tv,
                 emdm_mode=spec.emdm_mode,
-                bidirectional=True,
+                bidirectional=False,
             )
             n_edges = int(D_tv.shape[0])
             variables["tv_u"] = n_edges
@@ -309,17 +352,21 @@ def estimate_socp_bz_problem_size(
 
     if spec.lambda_curv_r1 < 0.0 or spec.lambda_curv_en < 0.0:
         raise ValueError("Curvature regularizer lambdas must be non-negative.")
-    if spec.lambda_curv_r1 < 0.0 or spec.lambda_curv_en < 0.0:
-        raise ValueError("Curvature regularizer lambdas must be non-negative.")
     use_curv = spec.use_curv_r1 or spec.use_curv_en
     if use_curv:
         if spec.gradient_scheme_curv == "edge":
-            D_curv, _ = _build_edge_block(
+            _, D_line_curv, _ = _build_edge_and_line_blocks(
                 surfaces,
-                rows_mode="interior",
                 emdm_mode=spec.emdm_mode,
                 bidirectional=False,
             )
+            n_line = int(D_line_curv.shape[0])
+            if spec.use_curv_r1:
+                variables["curv_u"] = n_line
+                n_nonneg += n_line
+                constraints["curv_r1"] = 2 * n_line
+            if spec.use_curv_en and spec.lambda_curv_en > 0.0:
+                constraints["curv_en"] = 0
         else:
             if spec.gradient_scheme_curv not in {"forward", "central"}:
                 raise ValueError("gradient_scheme_curv must be 'forward', 'central', or 'edge'.")
@@ -329,17 +376,17 @@ def estimate_socp_bz_problem_size(
                 emdm_mode=spec.emdm_mode,
                 scheme=spec.gradient_scheme_curv,
             )
-        nrows = int(D_curv.shape[0] // 2)
-        if nrows != n_unknown:
-            raise ValueError(
-                "Curvature regularizer requires rows_mode='interior' so that nrows == n_unknown."
-            )
-        if spec.use_curv_r1:
-            variables["curv_u"] = nrows
-            n_nonneg += nrows
-            constraints["curv_r1"] = nrows
-        if spec.use_curv_en and spec.lambda_curv_en > 0.0:
-            constraints["curv_en"] = 0
+            nrows = int(D_curv.shape[0] // 2)
+            if nrows != n_unknown:
+                raise ValueError(
+                    "Curvature regularizer requires rows_mode='interior' so that nrows == n_unknown."
+                )
+            if spec.use_curv_r1:
+                variables["curv_u"] = nrows
+                n_nonneg += nrows
+                constraints["curv_r1"] = nrows
+            if spec.use_curv_en and spec.lambda_curv_en > 0.0:
+                constraints["curv_en"] = 0
 
     n_variables = int(sum(variables.values()))
     n_constraints = int(sum(constraints.values()))
@@ -412,7 +459,7 @@ def solve_socp_bz(
                 surfaces,
                 rows_mode=rows_pitch,
                 emdm_mode=spec.emdm_mode,
-                bidirectional=True,
+                bidirectional=False,
             )
             g_pitch = D_pitch @ s
             constraints.append(g_pitch <= spec.J_max)
@@ -440,7 +487,7 @@ def solve_socp_bz(
                 surfaces,
                 rows_mode=rows_tv,
                 emdm_mode=spec.emdm_mode,
-                bidirectional=True,
+                bidirectional=False,
             )
             g_tv = D_tv @ s
             u = cp.Variable(g_tv.shape[0], nonneg=True)
@@ -470,7 +517,7 @@ def solve_socp_bz(
                 surfaces,
                 rows_mode=rows_pwr,
                 emdm_mode=spec.emdm_mode,
-                bidirectional=True,
+                bidirectional=False,
             )
             g_pwr = D_pwr @ s
             Wsqrt = np.sqrt(2.0 * spec.r_sheet * areas)
@@ -609,43 +656,85 @@ def solve_socp_bz(
     use_curv = spec.use_curv_r1 or spec.use_curv_en
     if use_curv:
         if spec.gradient_scheme_curv == "edge":
-            D_curv, _ = _build_edge_block(
+            D_edge_curv, D_line_curv, areas_line_curv = _build_edge_and_line_blocks(
                 surfaces,
-                rows_mode="interior",
                 emdm_mode=spec.emdm_mode,
                 bidirectional=False,
             )
+            g_edge_curv = D_edge_curv @ s
+            g_line_curv = D_line_curv @ g_edge_curv
+
+            if spec.use_curv_r1:
+                n_line = int(D_line_curv.shape[0])
+                if n_line > 0:
+                    u_curv = cp.Variable(n_line, nonneg=True)
+                    constraints.append(g_line_curv <= u_curv)
+                    constraints.append(-g_line_curv <= u_curv)
+                    if spec.curv_area_weights:
+                        w_line_curv = _inverse_scaled_area_weights(areas_line_curv)
+                        obj_terms.append(
+                            spec.lambda_curv_r1 * cp.sum(cp.multiply(w_line_curv, u_curv))
+                        )
+                    else:
+                        obj_terms.append(spec.lambda_curv_r1 * cp.sum(u_curv))
+
+            if spec.use_curv_en and spec.lambda_curv_en > 0.0:
+                if int(D_line_curv.shape[0]) > 0:
+                    if spec.curv_area_weights:
+                        w_line_curv = _inverse_scaled_area_weights(areas_line_curv)
+                        obj_terms.append(
+                            spec.lambda_curv_en
+                            * cp.sum(cp.multiply(w_line_curv, cp.square(g_line_curv)))
+                        )
+                    else:
+                        obj_terms.append(spec.lambda_curv_en * cp.sum_squares(g_line_curv))
         else:
             if spec.gradient_scheme_curv not in {"forward", "central"}:
                 raise ValueError("gradient_scheme_curv must be 'forward', 'central', or 'edge'.")
-            D_curv, _ = _build_gradient_block(
+            D_curv, areas_curv = _build_gradient_block(
                 surfaces,
                 rows_mode="interior",
                 emdm_mode=spec.emdm_mode,
                 scheme=spec.gradient_scheme_curv,
             )
-        nrows = D_curv.shape[0] // 2
-        if D_curv.shape[0] != 2 * nrows or D_curv.shape[1] != n_unknown:
-            raise RuntimeError("Curvature gradient operator shape mismatch.")
-        if nrows != n_unknown:
-            raise RuntimeError(
-                "Curvature regularizer requires rows_mode='interior' so that nrows == n_unknown."
-            )
+            nrows = D_curv.shape[0] // 2
+            if D_curv.shape[0] != 2 * nrows or D_curv.shape[1] != n_unknown:
+                raise RuntimeError("Curvature gradient operator shape mismatch.")
+            if nrows != n_unknown:
+                raise RuntimeError(
+                    "Curvature regularizer requires rows_mode='interior' so that nrows == n_unknown."
+                )
 
-        g = D_curv @ s
-        g_u = g[0::2]
-        g_v = g[1::2]
-        Dg_u = D_curv @ g_u
-        Dg_v = D_curv @ g_v
+            g = D_curv @ s
+            g_u = g[0::2]
+            g_v = g[1::2]
+            Dg_u = D_curv @ g_u
+            Dg_v = D_curv @ g_v
 
-        if spec.use_curv_r1:
-            H4 = cp.vstack([Dg_u[0::2], Dg_u[1::2], Dg_v[0::2], Dg_v[1::2]]).T
-            u_curv = cp.Variable(nrows, nonneg=True)
-            constraints.append(cp.norm(H4, 2, axis=1) <= u_curv)
-            obj_terms.append(spec.lambda_curv_r1 * cp.sum(u_curv))
+            if spec.use_curv_r1:
+                H4 = cp.vstack([Dg_u[0::2], Dg_u[1::2], Dg_v[0::2], Dg_v[1::2]]).T
+                u_curv = cp.Variable(nrows, nonneg=True)
+                constraints.append(cp.norm(H4, 2, axis=1) <= u_curv)
+                if spec.curv_area_weights:
+                    w_curv = _inverse_scaled_area_weights(areas_curv)
+                    obj_terms.append(spec.lambda_curv_r1 * cp.sum(cp.multiply(w_curv, u_curv)))
+                else:
+                    obj_terms.append(spec.lambda_curv_r1 * cp.sum(u_curv))
 
-        if spec.use_curv_en and spec.lambda_curv_en > 0.0:
-            obj_terms.append(spec.lambda_curv_en * (cp.sum_squares(Dg_u) + cp.sum_squares(Dg_v)))
+            if spec.use_curv_en and spec.lambda_curv_en > 0.0:
+                if spec.curv_area_weights:
+                    curv_sq = (
+                        cp.square(Dg_u[0::2])
+                        + cp.square(Dg_u[1::2])
+                        + cp.square(Dg_v[0::2])
+                        + cp.square(Dg_v[1::2])
+                    )
+                    w_curv = _inverse_scaled_area_weights(areas_curv)
+                    obj_terms.append(spec.lambda_curv_en * cp.sum(cp.multiply(w_curv, curv_sq)))
+                else:
+                    obj_terms.append(
+                        spec.lambda_curv_en * (cp.sum_squares(Dg_u) + cp.sum_squares(Dg_v))
+                    )
 
     objective = cp.Minimize(cp.sum(cp.hstack(obj_terms)))
     problem = cp.Problem(objective, constraints)

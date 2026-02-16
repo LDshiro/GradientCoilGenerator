@@ -28,6 +28,7 @@ def save_socp_bz_npz(
     bz_target: np.ndarray,
     config: dict,
     target_source: TargetBzSource | None = None,
+    extra: dict[str, np.ndarray] | None = None,
 ) -> Path:
     save_path = Path(path)
     config_json = _json_array(json.dumps(config, ensure_ascii=False))
@@ -74,6 +75,10 @@ def save_socp_bz_npz(
             data["scale_policy"] = _json_array(str(target_source.scale_policy))
         if hasattr(target_source, "max_order"):
             data["max_order"] = np.asarray(int(target_source.max_order), dtype=int)
+
+    if extra:
+        for key, value in extra.items():
+            data[key] = np.asarray(value)
 
     np.savez(save_path, **data)
     return save_path
